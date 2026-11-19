@@ -1,8 +1,11 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -58,6 +62,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,8 +80,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.service.AlarmScheduler
 import com.example.data.catalog.QuranCatalog
 import com.example.domain.model.AdhanVoice
 import com.example.domain.model.CalculationMethod
@@ -93,13 +102,16 @@ import kotlinx.coroutines.flow.StateFlow
 fun HomePrayerScreen(
     uiState: HomeUiState,
     countdownFlow: StateFlow<CountdownUiState>,
+    offlineAdhanIds: Set<String>,
     onSelectCity: (CityPreset) -> Unit,
     onDetectGps: () -> Unit,
     onSelectMethod: (CalculationMethod) -> Unit,
     onSelectAdhanVoice: (AdhanVoice) -> Unit,
+    onDownloadAdhanOffline: (AdhanVoice) -> Unit,
     onTogglePrayerAdhan: (PrayerName, Boolean) -> Unit,
     onTestAdhan: () -> Unit,
     onStopAdhan: () -> Unit,
+    onRescheduleAlarms: () -> Unit,
     onTogglePeriodicDhikr: (Boolean) -> Unit,
     onOpenMushafPage: (Int) -> Unit,
     onNavigateToAdhkar: () -> Unit,
@@ -107,12 +119,41 @@ fun HomePrayerScreen(
     onDismissBanner: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val schedule = uiState.schedule
     val settings = uiState.settings
 
     var showCityDialog by remember { mutableStateOf(false) }
     var showQiblaDialog by remember { mutableStateOf(false) }
     var showMethodDialog by remember { mutableStateOf(false) }
+
+    fun checkPostNotifications(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
+
+    var hasNotificationPermission by remember { mutableStateOf(checkPostNotifications()) }
+    var hasExactAlarmPermission by remember { mutableStateOf(AlarmScheduler.canScheduleExactAlarms(context)) }
+    var isIgnoringBattery by remember { mutableStateOf(AlarmScheduler.isIgnoringBatteryOptimizations(context)) }
+    var pendingEnablePeriodicDhikr by remember { mutableStateOf(false) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasNotificationPermission = checkPostNotifications()
+                val exactNow = AlarmScheduler.canScheduleExactAlarms(context)
+                if (exactNow != hasExactAlarmPermission) {
+                    hasExactAlarmPermission = exactNow
+                }
+                isIgnoringBattery = AlarmScheduler.isIgnoringBatteryOptimizations(context)
+                onRescheduleAlarms()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val locationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -123,7 +164,16 @@ fun HomePrayerScreen(
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) onTogglePeriodicDhikr(true)
+        hasNotificationPermission = granted || checkPostNotifications()
+        if (granted) {
+            onRescheduleAlarms()
+            if (pendingEnablePeriodicDhikr) {
+                pendingEnablePeriodicDhikr = false
+                onTogglePeriodicDhikr(true)
+            }
+        } else {
+            pendingEnablePeriodicDhikr = false
+        }
     }
 
     Box(
@@ -277,16 +327,35 @@ fun HomePrayerScreen(
 
                             Spacer(Modifier.height(16.dp))
 
-                            Text(
-                                text = schedule?.hijriDate ?: "",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color(0xFFE3BE64)
-                            )
-                            Text(
-                                text = schedule?.gregorianDate ?: "",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.85f)
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = schedule?.hijriDate ?: "",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color(0xFFE3BE64)
+                                    )
+                                    Text(
+                                        text = schedule?.gregorianDate ?: "",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White.copy(alpha = 0.85f)
+                                    )
+                                }
+                                Surface(
+                                    color = Color(0x33D4AF37),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text(
+                                        text = "بدون نت ✓",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFE3BE64),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
 
                             Spacer(Modifier.height(18.dp))
 
@@ -445,6 +514,7 @@ fun HomePrayerScreen(
                             )
                             PeriodicDhikrSubtitleText(
                                 isEnabled = settings.isPeriodicDhikrEnabled,
+                                modeLabel = settings.periodicDhikrMode.arabicLabel,
                                 countdownFlow = countdownFlow
                             )
                         }
@@ -457,6 +527,7 @@ fun HomePrayerScreen(
                                         Manifest.permission.POST_NOTIFICATIONS
                                     ) == PackageManager.PERMISSION_GRANTED
                                     if (!granted) {
+                                        pendingEnablePeriodicDhikr = true
                                         notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                         return@Switch
                                     }
@@ -498,6 +569,47 @@ fun HomePrayerScreen(
                 )
             }
 
+            // Automatic Adhan Background Voice Readiness Card
+            item {
+                AdhanVoiceReadinessCard(
+                    hasNotificationPermission = hasNotificationPermission,
+                    hasExactAlarmPermission = hasExactAlarmPermission,
+                    isIgnoringBattery = isIgnoringBattery,
+                    onRequestNotification = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    },
+                    onOpenExactAlarmSettings = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            try {
+                                val exactIntent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(exactIntent)
+                            } catch (_: Exception) {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                )
+                            }
+                        }
+                    },
+                    onOpenBatterySettings = {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        } catch (_: Exception) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                            )
+                        }
+                    }
+                )
+            }
+
             // Adhan Audio & Calculation Settings Card
             item {
                 Card(
@@ -535,12 +647,13 @@ fun HomePrayerScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     pair.forEach { voice ->
+                                        val isOfflineReady = voice.streamUrl == null || offlineAdhanIds.contains(voice.id)
                                         FilterChip(
                                             selected = settings.adhanVoice == voice,
                                             onClick = { onSelectAdhanVoice(voice) },
                                             label = {
                                                 Text(
-                                                    text = voice.arabicName,
+                                                    text = if (isOfflineReady) "${voice.arabicName} ✓" else voice.arabicName,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
@@ -549,6 +662,16 @@ fun HomePrayerScreen(
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        if (settings.adhanVoice.streamUrl != null && !offlineAdhanIds.contains(settings.adhanVoice.id)) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { onDownloadAdhanOffline(settings.adhanVoice) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("حفظ ${settings.adhanVoice.arabicName} للعمل بدون نت")
                             }
                         }
 
@@ -870,18 +993,108 @@ private fun PrayerCountdownText(countdownFlow: StateFlow<CountdownUiState>) {
 }
 
 @Composable
+private fun AdhanVoiceReadinessCard(
+    hasNotificationPermission: Boolean,
+    hasExactAlarmPermission: Boolean,
+    isIgnoringBattery: Boolean,
+    onRequestNotification: () -> Unit,
+    onOpenExactAlarmSettings: () -> Unit,
+    onOpenBatterySettings: () -> Unit
+) {
+    val allReady = hasNotificationPermission && hasExactAlarmPermission && isIgnoringBattery
+    val containerColor = if (allReady) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+    } else {
+        MaterialTheme.colorScheme.tertiaryContainer
+    }
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (allReady) Icons.Default.VolumeUp else Icons.Default.WarningAmber,
+                    contentDescription = "حالة صوت الأذان التلقائي",
+                    tint = if (allReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = if (allReady) {
+                        "صوت الأذان التلقائي مفعّل وجاهز ✓"
+                    } else {
+                        "تفعيل صوت الأذان التلقائي (بدلاً من الإشعار فقط)"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Text(
+                text = if (allReady) {
+                    "عند دخول وقت أي صلاة مفعّلة، سيُرفع الأذان بالصوت الكامل تلقائياً حتى والشاشة مغلقة."
+                } else {
+                    "لكي يصدح صوت الأذان كاملاً في وقت الصلاة ولا يكتفي الهاتف بإشعار صامت، تأكد من تفعيل الخيارات التالية:"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (!hasNotificationPermission) {
+                Button(
+                    onClick = onRequestNotification,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("grant_adhan_notifications_btn")
+                ) {
+                    Text("١. السماح بإشعارات الأذان")
+                }
+            }
+
+            if (!hasExactAlarmPermission) {
+                Button(
+                    onClick = onOpenExactAlarmSettings,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("grant_exact_alarm_btn")
+                ) {
+                    Text("السماح بالتنبيهات الدقيقة للأذان (مهم)")
+                }
+            }
+
+            if (!isIgnoringBattery) {
+                OutlinedButton(
+                    onClick = onOpenBatterySettings,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("ignore_battery_opt_btn")
+                ) {
+                    Text("إلغاء قيود البطارية ليعمل الأذان والشاشة مغلقة")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun PeriodicDhikrSubtitleText(
     isEnabled: Boolean,
+    modeLabel: String,
     countdownFlow: StateFlow<CountdownUiState>
 ) {
     val countdown by countdownFlow.collectAsStateWithLifecycle()
     Text(
         text = if (isEnabled && countdown.periodicCountdownText.isNotEmpty()) {
-            "مفعّل • الذكر القادم خلال ${countdown.periodicCountdownText}"
+            "$modeLabel • القادم خلال ${countdown.periodicCountdownText}"
         } else if (isEnabled) {
-            "مفعّل • ينطق الذكر تلقائياً"
+            "مفعّل • $modeLabel"
         } else {
-            "اضغط للتفعيل لتذكيرك بالذكر كل ٥ دقايق"
+            "اضغط لاختيار القارئ وتحديد الإشعار أو الصوت بدون نت"
         },
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant

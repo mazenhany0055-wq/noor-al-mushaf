@@ -1,5 +1,7 @@
 package com.example.data.repository
 
+import android.content.Context
+import com.example.data.catalog.BundledQuranAssetSource
 import com.example.data.catalog.OfflineQuranFallback
 import com.example.data.local.BookmarkDao
 import com.example.data.local.BookmarkEntity
@@ -13,10 +15,15 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 
 class QuranRepository(
+    context: Context,
     private val quranPageDao: QuranPageDao,
     private val bookmarkDao: BookmarkDao,
     private val apiService: AlQuranApiService
 ) {
+    private val appContext = context.applicationContext
+
+    fun isFullMushafBundled(): Boolean = BundledQuranAssetSource.isAvailable(appContext)
+
     fun observeBookmarks(): Flow<List<BookmarkEntity>> = bookmarkDao.observeBookmarks()
 
     fun observeIsPageBookmarked(page: Int): Flow<Boolean> = bookmarkDao.observeIsPageBookmarked(page)
@@ -25,6 +32,12 @@ class QuranRepository(
 
     suspend fun getMushafPage(page: Int): Result<List<MushafAyah>> = withContext(Dispatchers.IO) {
         val validPage = page.coerceIn(1, 604)
+
+        val bundled = BundledQuranAssetSource.getPage(appContext, validPage)
+        if (!bundled.isNullOrEmpty()) {
+            return@withContext Result.success(bundled)
+        }
+
         val cached = quranPageDao.getPageAyahs(validPage)
         if (cached.isNotEmpty()) {
             return@withContext Result.success(cached.map { it.toDomain() })
@@ -60,6 +73,7 @@ class QuranRepository(
 
     suspend fun prefetchPageSilently(page: Int) = withContext(Dispatchers.IO) {
         val validPage = page.coerceIn(1, 604)
+        if (BundledQuranAssetSource.isAvailable(appContext)) return@withContext
         if (quranPageDao.getPageCount(validPage) > 0) return@withContext
         try {
             val response = apiService.getPageUthmani(validPage)

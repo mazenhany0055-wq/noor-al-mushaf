@@ -41,7 +41,18 @@ object AdhkarCatalog {
             category = AdhkarCategory.MORNING,
             text = "اللَّهُ لَا إِلَٰهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ ۚ لَا تَأْخُذُهُ سِنَةٌ وَلَا نَوْمٌ ۚ لَّهُ مَا فِي السَّمَاوَاتِ وَمَا فِي الْأَرْضِ ۗ مَن ذَا الَّذِي يَشْفَعُ عِندَهُ إِلَّا بِإِذْنِهِ ۚ يَعْلَمُ مَا بَيْنَ أَيْدِيهِمْ وَمَا خَلْفَهُمْ ۖ وَلَا يُحِيطُونَ بِشَيْءٍ مِّنْ عِلْمِهِ إِلَّا بِمَا شَاءَ ۚ وَسِعَ كُرْسِيُّهُ السَّمَاوَاتِ وَالْأَرْضَ ۖ وَلَا يَئُودُهُ حِفْظُهُمَا ۚ وَهُوَ الْعَلِيُّ الْعَظِيمُ",
             targetCount = 1,
-            virtueOrSource = "آية الكرسي — من قالها حين يصبح أُجير من الجن حتى يمسي"
+            virtueOrSource = "آية الكرسي — من قالها حين يصبح أُجير من الجن حتى يمسي",
+            surahNumber = 2,
+            ayahNumbers = listOf(255)
+        ),
+        DhikrItem(
+            id = "m_muawwidhat",
+            category = AdhkarCategory.MORNING,
+            text = "قُلْ هُوَ اللَّهُ أَحَدٌ * اللَّهُ الصَّمَدُ * لَمْ يَلِدْ وَلَمْ يُولَدْ * وَلَمْ يَكُن لَّهُ كُفُوًا أَحَدٌ",
+            targetCount = 3,
+            virtueOrSource = "سورة الإخلاص (مع الفلق والناس ثلاثًا تكفيك من كل شيء)",
+            surahNumber = 112,
+            ayahNumbers = listOf(1, 2, 3, 4)
         ),
         DhikrItem(
             id = "m2",
@@ -87,6 +98,15 @@ object AdhkarCatalog {
         ),
 
         // أذكار المساء
+        DhikrItem(
+            id = "e_kursi",
+            category = AdhkarCategory.EVENING,
+            text = "اللَّهُ لَا إِلَٰهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ ۚ لَا تَأْخُذُهُ سِنَةٌ وَلَا نَوْمٌ ۚ لَّهُ مَا فِي السَّمَاوَاتِ وَمَا فِي الْأَرْضِ ۗ مَن ذَا الَّذِي يَشْفَعُ عِندَهُ إِلَّا بِإِذْنِهِ ۚ يَعْلَمُ مَا بَيْنَ أَيْدِيهِمْ وَمَا خَلْفَهُمْ ۖ وَلَا يُحِيطُونَ بِشَيْءٍ مِّنْ عِلْمِهِ إِلَّا بِمَا شَاءَ ۚ وَسِعَ كُرْسِيُّهُ السَّمَاوَاتِ وَالْأَرْضَ ۖ وَلَا يَئُودُهُ حِفْظُهُمَا ۚ وَهُوَ الْعَلِيُّ الْعَظِيمُ",
+            targetCount = 1,
+            virtueOrSource = "آية الكرسي — حرزٌ للمسلم حتى يصبح",
+            surahNumber = 2,
+            ayahNumbers = listOf(255)
+        ),
         DhikrItem(
             id = "e1",
             category = AdhkarCategory.EVENING,
@@ -198,28 +218,36 @@ object AdhkarCatalog {
             category = AdhkarCategory.QURANIC_DUAS,
             text = "رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ",
             targetCount = 1,
-            virtueOrSource = "سورة البقرة - آية ٢٠١"
+            virtueOrSource = "سورة البقرة - آية ٢٠١",
+            surahNumber = 2,
+            ayahNumbers = listOf(201)
         ),
         DhikrItem(
             id = "q2",
             category = AdhkarCategory.QURANIC_DUAS,
             text = "رَبَّنَا لَا تُزِغْ قُلُوبَنَا بَعْدَ إِذْ هَدَيْتَنَا وَهَبْ لَنَا مِن لَّدُنكَ رَحْمَةً ۚ إِنَّكَ أَنتَ الْوَهَّابُ",
             targetCount = 1,
-            virtueOrSource = "سورة آل عمران - آية ٨"
+            virtueOrSource = "سورة آل عمران - آية ٨",
+            surahNumber = 3,
+            ayahNumbers = listOf(8)
         ),
         DhikrItem(
             id = "q3",
             category = AdhkarCategory.QURANIC_DUAS,
             text = "رَبِّ اشْرَحْ لِي صَدْرِي * وَيَسِّرْ لِي أَمْرِي * وَاحْلُلْ عُقْدَةً مِّن لِّسَانِي * يَفْقَهُوا قَوْلِي",
             targetCount = 1,
-            virtueOrSource = "سورة طه - آية ٢٥-٢٨"
+            virtueOrSource = "سورة طه - آية ٢٥-٢٨",
+            surahNumber = 20,
+            ayahNumbers = listOf(25, 26, 27, 28)
         ),
         DhikrItem(
             id = "q4",
             category = AdhkarCategory.QURANIC_DUAS,
             text = "رَبِّ اجْعَلْنِي مُقِيمَ الصَّلَاةِ وَمِن ذُرِّيَّتِي ۚ رَبَّنَا وَتَقَبَّلْ دُعَاءِ",
             targetCount = 1,
-            virtueOrSource = "سورة إبراهيم - آية ٤٠"
+            virtueOrSource = "سورة إبراهيم - آية ٤٠",
+            surahNumber = 14,
+            ayahNumbers = listOf(40)
         )
     )
 }

@@ -5,6 +5,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
+import com.example.MainActivity
 import com.example.data.preferences.UserSettings
 import com.example.domain.model.PrayerName
 import com.example.domain.prayer.PrayerTimeCalculator
@@ -15,6 +17,24 @@ object AlarmScheduler {
 
     private const val PRAYER_REQUEST_BASE = 2000
     private const val DHIKR_REQUEST_CODE = 3050
+
+    fun canScheduleExactAlarms(context: Context): Boolean {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
+        } else {
+            true
+        }
+    }
+
+    fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+        } else {
+            true
+        }
+    }
 
     fun schedulePrayerAlarms(context: Context, settings: UserSettings) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -54,6 +74,7 @@ object AlarmScheduler {
             val intent = Intent(context, AdhanAlarmReceiver::class.java).apply {
                 putExtra(AdhanAlarmReceiver.EXTRA_PRAYER_NAME, prayer.arabicName)
                 putExtra(AdhanAlarmReceiver.EXTRA_ADHAN_VOICE, settings.adhanVoice.id)
+                putExtra(AdhanAlarmReceiver.EXTRA_TTS_VOICE_ID, settings.adhkarVoiceId)
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -76,7 +97,13 @@ object AlarmScheduler {
                     ?: (now + 86_400_000L)
             }
 
-            scheduleSingleAlarm(alarmManager, triggerAt, pendingIntent)
+            scheduleSingleAlarm(
+                context = context,
+                alarmManager = alarmManager,
+                triggerAtMillis = triggerAt,
+                pendingIntent = pendingIntent,
+                useAlarmClock = true
+            )
         }
     }
 
@@ -93,7 +120,13 @@ object AlarmScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        scheduleSingleAlarm(alarmManager, triggerAt, pendingIntent)
+        scheduleSingleAlarm(
+            context = context,
+            alarmManager = alarmManager,
+            triggerAtMillis = triggerAt,
+            pendingIntent = pendingIntent,
+            useAlarmClock = false
+        )
         return triggerAt
     }
 
@@ -110,35 +143,41 @@ object AlarmScheduler {
     }
 
     private fun scheduleSingleAlarm(
+        context: Context,
         alarmManager: AlarmManager,
         triggerAtMillis: Long,
-        pendingIntent: PendingIntent
+        pendingIntent: PendingIntent,
+        useAlarmClock: Boolean
     ) {
-        val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            alarmManager.canScheduleExactAlarms()
-        } else {
-            true
-        }
+        val canExact = canScheduleExactAlarms(context)
         if (canExact) {
             try {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent
-                )
+                if (useAlarmClock) {
+                    val showIntent = PendingIntent.getActivity(
+                        context,
+                        0,
+                        Intent(context, MainActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    alarmManager.setAlarmClock(
+                        AlarmManager.AlarmClockInfo(triggerAtMillis, showIntent),
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                }
+                return
             } catch (_: SecurityException) {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent
-                )
             }
-        } else {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerAtMillis,
-                pendingIntent
-            )
         }
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            triggerAtMillis,
+            pendingIntent
+        )
     }
 }

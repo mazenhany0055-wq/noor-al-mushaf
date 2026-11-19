@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -27,7 +28,17 @@ class DhikrReminderReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val pendingResult = goAsync()
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val wakeLock = try {
+            powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NoorAlMushaf:DhikrWake")?.apply {
+                acquire(10_500L)
+            }
+        } catch (_: Exception) {
+            null
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
+            var speaker: DhikrSpeaker? = null
             try {
                 val app = context.applicationContext as NoorAlMushafApp
                 val settings = app.preferencesRepository.getCurrentSettings()
@@ -38,7 +49,9 @@ class DhikrReminderReceiver : BroadcastReceiver() {
                 val phrase = phrases[currentIndex]
                 val nextIndex = (currentIndex + 1) % phrases.size
 
-                postDhikrNotification(context, phrase, settings.periodicDhikrMode)
+                if (settings.periodicDhikrMode.includesNotification) {
+                    postDhikrNotification(context, phrase, settings.periodicDhikrMode)
+                }
 
                 val nextTrigger = AlarmScheduler.scheduleNextPeriodicDhikr(
                     context,
@@ -49,11 +62,14 @@ class DhikrReminderReceiver : BroadcastReceiver() {
                     phraseIndex = nextIndex
                 )
 
-                if (settings.periodicDhikrMode == PeriodicDhikrMode.VOICE_AND_NOTIFICATION) {
-                    val speaker = DhikrSpeaker(context)
-                    speaker.speakDhikr(phrase) {
-                        speaker.release()
-                    }
+                if (settings.periodicDhikrMode.includesVoice) {
+                    speaker = DhikrSpeaker(context, app.offlineAudioRepository)
+                    speaker.speakAndAwait(
+                        phrase = phrase,
+                        voiceId = settings.adhkarVoiceId,
+                        chimeBefore = settings.adhkarChimeBeforeVoice,
+                        timeoutMs = 9_000L
+                    )
                 } else if (settings.periodicDhikrMode == PeriodicDhikrMode.CHIME_AND_NOTIFICATION) {
                     try {
                         val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -62,6 +78,14 @@ class DhikrReminderReceiver : BroadcastReceiver() {
                     }
                 }
             } finally {
+                try {
+                    speaker?.release()
+                } catch (_: Exception) {
+                }
+                try {
+                    if (wakeLock?.isHeld == true) wakeLock.release()
+                } catch (_: Exception) {
+                }
                 pendingResult.finish()
             }
         }
@@ -75,6 +99,7 @@ class DhikrReminderReceiver : BroadcastReceiver() {
             phrase: String,
             mode: PeriodicDhikrMode
         ) {
+            if (!mode.includesNotification) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val granted = ContextCompat.checkSelfPermission(
                     context,

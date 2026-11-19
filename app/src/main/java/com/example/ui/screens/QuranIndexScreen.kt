@@ -72,6 +72,7 @@ fun QuranIndexScreen(
     lastReadPage: Int,
     bookmarks: List<BookmarkEntity>,
     cachedPagesCount: Int,
+    isFullMushafBundled: Boolean,
     onOpenMushafPage: (Int) -> Unit,
     onPlaySurah: (Int) -> Unit,
     onDeleteBookmark: (Int) -> Unit
@@ -135,7 +136,11 @@ fun QuranIndexScreen(
                                 color = Color(0xFFE3BE64)
                             )
                             Text(
-                                text = "تقليب الصفحات • ٦٠٤ صفحة بالرسم العثماني (محفوظ تلقائياً: ${PrayerTimeCalculator.toArabicDigits(cachedPagesCount)} صفحة)",
+                                text = if (isFullMushafBundled) {
+                                    "٦٠٤ / ٦٠٤ صفحة بالرسم العثماني • متاح بالكامل بدون نت ✓"
+                                } else {
+                                    "تقليب الصفحات • ٦٠٤ صفحة بالرسم العثماني (محفوظ تلقائياً: ${PrayerTimeCalculator.toArabicDigits(cachedPagesCount)} صفحة)"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White.copy(alpha = 0.85f)
                             )

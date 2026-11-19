@@ -29,6 +29,84 @@ jobs:
             keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Bundle offline Quran 604 pages & starter audio into APK assets
+        run: |
+          mkdir -p app/src/main/assets/audio/quran/yasser
+          mkdir -p app/src/main/assets/audio/quran/afs
+          mkdir -p app/src/main/assets/audio/ayahs/yasser
+          mkdir -p app/src/main/assets/audio/ayahs/afs
+
+          python3 - << 'PYEOF'
+          import gzip, json, urllib.request
+          try:
+              req = urllib.request.Request(
+                  "https://api.alquran.cloud/v1/quran/quran-uthmani",
+                  headers={"User-Agent": "NoorAlMushaf-Builder/1.0"}
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  raw = json.loads(resp.read().decode("utf-8"))
+              surahs = raw.get("data", {}).get("surahs", [])
+              out = []
+              for surah in surahs:
+                  s_num = surah["number"]
+                  s_name = surah["name"]
+                  for ayah in surah.get("ayahs", []):
+                      out.append({
+                          "g": ayah["number"],
+                          "s": s_num,
+                          "sn": s_name,
+                          "a": ayah["numberInSurah"],
+                          "t": ayah["text"],
+                          "p": ayah["page"],
+                          "j": ayah["juz"],
+                          "h": ayah["hizbQuarter"]
+                      })
+              if len(out) >= 6200:
+                  with gzip.open("app/src/main/assets/quran_pages.json.gz", "wt", encoding="utf-8") as gz:
+                      json.dump(out, gz, ensure_ascii=False, separators=(",", ":"))
+                  print(f"Bundled {len(out)} ayahs for 100% offline 604-page Mushaf")
+          except Exception as e:
+              print("Warning: Could not pre-bundle full Quran text:", e)
+          PYEOF
+
+          fetch_mp3() {
+            local url="$1"
+            local dest="$2"
+            if curl -fsSL --max-time 25 -A "Mozilla/5.0" "$url" -o "$dest.tmp"; then
+              local sz
+              sz=$(wc -c < "$dest.tmp" || echo 0)
+              if [ "$sz" -gt 16384 ] && ! head -c 32 "$dest.tmp" | grep -qiE "<!doctype|<html"; then
+                mv "$dest.tmp" "$dest"
+                echo "Bundled $dest ($sz bytes)"
+                return 0
+              fi
+            fi
+            rm -f "$dest.tmp"
+            return 1
+          }
+
+          # Offline Adhan audio (with mirrors)
+          fetch_mp3 "https://www.islamcan.com/audio/adhan/azan1.mp3" "app/src/main/assets/audio/adhan_makkah.mp3" || \
+            fetch_mp3 "https://cdn.aladhan.com/audio/adhans/a1.mp3" "app/src/main/assets/audio/adhan_makkah.mp3" || \
+            fetch_mp3 "https://www.islamcan.com/audio/adhan/azan3.mp3" "app/src/main/assets/audio/adhan_makkah.mp3" || true
+          fetch_mp3 "https://www.islamcan.com/audio/adhan/azan2.mp3" "app/src/main/assets/audio/adhan_madinah.mp3" || \
+            fetch_mp3 "https://cdn.aladhan.com/audio/adhans/a2.mp3" "app/src/main/assets/audio/adhan_madinah.mp3" || true
+          fetch_mp3 "https://cdn.aladhan.com/audio/adhans/a9.mp3" "app/src/main/assets/audio/adhan_alafasy.mp3" || \
+            fetch_mp3 "https://cdn.aladhan.com/audio/adhans/a4.mp3" "app/src/main/assets/audio/adhan_alafasy.mp3" || true
+
+          # Starter offline Surahs (Al-Fatihah, Al-Asr, Al-Kawthar, Al-Ikhlas, Al-Falaq, An-Nas)
+          for num in 001 103 108 112 113 114; do
+            s_int=$((10#$num))
+            fetch_mp3 "https://download.quranicaudio.com/quran/yasser_ad-dussary/$num.mp3" "app/src/main/assets/audio/quran/yasser/$num.mp3" || \
+              fetch_mp3 "https://server11.mp3quran.net/yasser/$num.mp3" "app/src/main/assets/audio/quran/yasser/$num.mp3" || true
+            fetch_mp3 "https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/$s_int.mp3" "app/src/main/assets/audio/quran/afs/$num.mp3" || \
+              fetch_mp3 "https://server8.mp3quran.net/afs/$num.mp3" "app/src/main/assets/audio/quran/afs/$num.mp3" || true
+          done
+
+          # Offline Ayat Al-Kursi for Adhkar reciters
+          fetch_mp3 "https://everyayah.com/data/Yasser_Ad-Dussary_128kbps/002255.mp3" "app/src/main/assets/audio/ayahs/yasser/002255.mp3" || true
+          fetch_mp3 "https://everyayah.com/data/Alafasy_128kbps/002255.mp3" "app/src/main/assets/audio/ayahs/afs/002255.mp3" || true
+
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -46,11 +124,15 @@ jobs:
           name: NoorAlMushaf-APK
           path: NoorAlMushaf.apk
 
-      - name: Publish APK in GitHub Releases (Direct Download)
+      - name: Publish APK in GitHub Releases (v1.2)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="apk-v1.${{ github.run_number }}"
-          gh release create "$TAG" NoorAlMushaf.apk \
-            --title "نور المصحف - نسخة أندرويد ($TAG)" \
-            --notes "اضغط على ملف NoorAlMushaf.apk بالأسفل لتحميل التطبيق وتثبيته مباشرة على هاتفك الأندرويد."
+          TAG="v1.2"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" NoorAlMushaf.apk --clobber
+          else
+            gh release create "$TAG" NoorAlMushaf.apk \
+              --title "نور المصحف - الإصدار v1.2" \
+              --notes "تحديث v1.2: تشغيل صوت الأذان كاملاً تلقائياً، دعم العمل بدون إنترنت بالكامل، وتحسين كارت تفعيل الأذان التلقائي. اضغط على NoorAlMushaf.apk بالأسفل للتحميل والتثبيت."
+          fi

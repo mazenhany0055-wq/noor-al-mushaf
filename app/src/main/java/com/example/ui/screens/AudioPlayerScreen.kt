@@ -23,7 +23,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -36,6 +39,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,19 +62,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.catalog.QuranCatalog
+import com.example.data.repository.OfflineAudioRepository
 import com.example.domain.model.ReciterInfo
 import com.example.domain.model.SurahInfo
 import com.example.domain.prayer.PrayerTimeCalculator
 import com.example.service.AudioPlaybackState
 import com.example.ui.components.formatAudioTime
 import com.example.ui.theme.AmiriFontFamily
+import java.util.Locale
 
 @Composable
 fun AudioPlayerScreen(
     selectedReciterId: String,
     audioState: AudioPlaybackState,
+    offlineSurahsByReciter: Map<String, Set<Int>>,
+    downloadProgress: Map<String, Float>,
+    totalOfflineBytes: Long,
     onSelectReciter: (String) -> Unit,
     onPlaySurah: (surahNumber: Int, reciterId: String) -> Unit,
+    onDownloadSurah: (reciterId: String, surahNumber: Int) -> Unit,
+    onDownloadBatch: (reciterId: String, surahNumbers: List<Int>) -> Unit,
+    onDeleteDownloadedSurah: (reciterId: String, surahNumber: Int) -> Unit,
     onTogglePlayPause: () -> Unit,
     onStop: () -> Unit,
     onNextSurah: () -> Unit,
@@ -77,16 +90,26 @@ fun AudioPlayerScreen(
     onSeekTo: (Long) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var showOfflineOnly by remember { mutableStateOf(false) }
+
     val selectedReciter = remember(selectedReciterId) {
         QuranCatalog.reciters.find { it.id == selectedReciterId } ?: QuranCatalog.reciters.first()
     }
-    val filteredSurahs = remember(searchQuery) {
-        if (searchQuery.isBlank()) QuranCatalog.surahs
-        else QuranCatalog.surahs.filter {
-            it.arabicName.contains(searchQuery.trim()) ||
-                it.englishName.contains(searchQuery.trim(), ignoreCase = true) ||
-                it.number.toString() == searchQuery.trim()
+    val offlineSurahsForReciter = offlineSurahsByReciter[selectedReciterId].orEmpty()
+
+    val filteredSurahs = remember(searchQuery, showOfflineOnly, offlineSurahsForReciter) {
+        QuranCatalog.surahs.filter { surah ->
+            val matchesQuery = searchQuery.isBlank() ||
+                surah.arabicName.contains(searchQuery.trim()) ||
+                surah.englishName.contains(searchQuery.trim(), ignoreCase = true) ||
+                surah.number.toString() == searchQuery.trim()
+            val matchesOffline = !showOfflineOnly || offlineSurahsForReciter.contains(surah.number)
+            matchesQuery && matchesOffline
         }
+    }
+
+    val offlineMb = remember(totalOfflineBytes) {
+        String.format(Locale.US, "%.1f", totalOfflineBytes / (1024f * 1024f))
     }
 
     Box(
@@ -107,7 +130,7 @@ fun AudioPlayerScreen(
                         style = MaterialTheme.typography.headlineLarge
                     )
                     Text(
-                        text = "اضغط على أي سورة للاستماع مباشرة بصوت الشيخ ${selectedReciter.arabicName}",
+                        text = "استمع أو حمّل السور للاستماع بدون نت بصوت الشيخ ${selectedReciter.arabicName}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -137,14 +160,79 @@ fun AudioPlayerScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(QuranCatalog.reciters, key = { it.id }) { reciter ->
+                        val offlineCount = offlineSurahsByReciter[reciter.id]?.size ?: 0
                         ReciterCard(
                             reciter = reciter,
+                            offlineCount = offlineCount,
                             isSelected = reciter.id == selectedReciterId,
                             onClick = {
                                 onSelectReciter(reciter.id)
                                 onPlaySurah(audioState.currentSurahNumber, reciter.id)
                             }
                         )
+                    }
+                }
+            }
+
+            // Offline Downloads & Filter Card
+            item {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.OfflinePin,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "جاهز بدون نت: ${PrayerTimeCalculator.toArabicDigits(offlineSurahsForReciter.size)} / ١١٤ سورة",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = "$offlineMb MB",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f)
+                            )
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilledTonalButton(
+                                onClick = {
+                                    onDownloadBatch(selectedReciter.id, OfflineAudioRepository.quickDownloadShortSurahs)
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.DownloadForOffline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("تحميل قصار السور", maxLines = 1)
+                            }
+
+                            FilterChip(
+                                selected = showOfflineOnly,
+                                onClick = { showOfflineOnly = !showOfflineOnly },
+                                label = { Text("بدون نت فقط", maxLines = 1) },
+                                modifier = Modifier.testTag("filter_offline_surahs_chip")
+                            )
+                        }
                     }
                 }
             }
@@ -168,15 +256,26 @@ fun AudioPlayerScreen(
                 val isCurrentSurah = audioState.hasActiveItem &&
                     audioState.currentSurahNumber == surah.number &&
                     audioState.currentReciterId == selectedReciterId
+                val isOfflineReady = offlineSurahsForReciter.contains(surah.number)
+                val progress = downloadProgress[OfflineAudioRepository.progressKey(selectedReciterId, surah.number)]
 
                 SurahAudioRow(
                     surah = surah,
                     isCurrent = isCurrentSurah,
                     isPlaying = isCurrentSurah && audioState.isPlaying,
                     isBuffering = isCurrentSurah && audioState.isBuffering,
+                    isOfflineReady = isOfflineReady,
+                    downloadProgress = progress,
                     onClick = {
                         if (isCurrentSurah) onTogglePlayPause()
                         else onPlaySurah(surah.number, selectedReciterId)
+                    },
+                    onDownloadClick = {
+                        if (isOfflineReady) {
+                            onDeleteDownloadedSurah(selectedReciterId, surah.number)
+                        } else {
+                            onDownloadSurah(selectedReciterId, surah.number)
+                        }
                     }
                 )
             }
@@ -341,6 +440,7 @@ private fun ActiveQuranPlayerCard(
 @Composable
 private fun ReciterCard(
     reciter: ReciterInfo,
+    offlineCount: Int,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -357,7 +457,7 @@ private fun ReciterCard(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 4.dp else 1.dp),
         modifier = Modifier
-            .width(172.dp)
+            .width(176.dp)
             .then(borderMod)
             .clickable { onClick() }
             .testTag("reciter_card_${reciter.id}")
@@ -399,7 +499,7 @@ private fun ReciterCard(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = reciter.styleLabel,
+                text = if (offlineCount > 0) "بدون نت: ${PrayerTimeCalculator.toArabicDigits(offlineCount)} سورة" else reciter.styleLabel,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -415,7 +515,10 @@ private fun SurahAudioRow(
     isCurrent: Boolean,
     isPlaying: Boolean,
     isBuffering: Boolean,
-    onClick: () -> Unit
+    isOfflineReady: Boolean,
+    downloadProgress: Float?,
+    onClick: () -> Unit,
+    onDownloadClick: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -472,11 +575,43 @@ private fun SurahAudioRow(
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "${surah.revelationLabel} • ${PrayerTimeCalculator.toArabicDigits(surah.ayahCount)} آية",
+                    text = buildString {
+                        append(surah.revelationLabel)
+                        append(" • ")
+                        append(PrayerTimeCalculator.toArabicDigits(surah.ayahCount))
+                        append(" آية")
+                        if (isOfflineReady) append(" • بدون نت ✓")
+                    },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isOfflineReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+
+            if (downloadProgress != null) {
+                Box(
+                    modifier = Modifier.size(48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        progress = { downloadProgress },
+                        modifier = Modifier.size(26.dp),
+                        strokeWidth = 2.5.dp
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = onDownloadClick,
+                    modifier = Modifier.testTag("download_surah_${surah.number}")
+                ) {
+                    Icon(
+                        imageVector = if (isOfflineReady) Icons.Default.OfflinePin else Icons.Default.DownloadForOffline,
+                        contentDescription = if (isOfflineReady) "محفوظة بدون نت" else "تحميل السورة للاستماع بدون نت",
+                        tint = if (isOfflineReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(4.dp))
 
             Surface(
                 color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,

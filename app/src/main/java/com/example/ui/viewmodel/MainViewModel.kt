@@ -2,18 +2,18 @@ package com.example.ui.viewmodel
 
 import android.annotation.SuppressLint
 import android.app.Application
-import android.content.Intent
 import android.location.Geocoder
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.NoorAlMushafApp
 import com.example.data.catalog.AdhkarCatalog
+import com.example.data.catalog.QuranCatalog
 import com.example.data.preferences.UserSettings
 import com.example.domain.model.AdhanVoice
 import com.example.domain.model.CalculationMethod
 import com.example.domain.model.CityPreset
 import com.example.domain.model.DailyPrayerSchedule
+import com.example.domain.model.OfflineTtsVoiceInfo
 import com.example.domain.model.PeriodicDhikrMode
 import com.example.domain.model.PrayerName
 import com.example.domain.prayer.PrayerTimeCalculator
@@ -24,6 +24,8 @@ import com.example.service.AudioPlaybackState
 import com.example.service.DhikrSpeaker
 import com.example.service.QuranAudioManager
 import com.google.android.gms.location.LocationServices
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 data class CountdownUiState(
     val prayerCountdownText: String = "٠٠:٠٠:٠٠",
@@ -53,8 +59,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as NoorAlMushafApp
     private val prefsRepo = app.preferencesRepository
-    val audioManager = QuranAudioManager(application, app.apiService)
-    private val dhikrSpeaker = DhikrSpeaker(application)
+    private val offlineAudioRepo = app.offlineAudioRepository
+    val audioManager = QuranAudioManager(application, app.apiService, offlineAudioRepo)
+    private val dhikrSpeaker = DhikrSpeaker(application, offlineAudioRepo)
 
     private val _scheduleRefreshEpoch = MutableStateFlow(System.currentTimeMillis())
     private val _isDetectingLocation = MutableStateFlow(false)
@@ -70,6 +77,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     val audioState: StateFlow<AudioPlaybackState> = audioManager.state
+    val offlineSurahsByReciter: StateFlow<Map<String, Set<Int>>> = offlineAudioRepo.offlineSurahsByReciter
+    val downloadProgress: StateFlow<Map<String, Float>> = offlineAudioRepo.downloadProgress
+    val offlineAdhanIds: StateFlow<Set<String>> = offlineAudioRepo.offlineAdhanIds
+    val totalOfflineAudioBytes: StateFlow<Long> = offlineAudioRepo.totalStorageBytes
+    val availableSystemVoices: StateFlow<List<OfflineTtsVoiceInfo>> = dhikrSpeaker.availableSystemVoices
+
+    val isFullMushafBundled: Boolean by lazy { app.quranRepository.isFullMushafBundled() }
 
     private val initialSchedule: DailyPrayerSchedule by lazy {
         val def = UserSettings()
@@ -184,12 +198,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     _isDetectingLocation.value = false
-                    showBanner("تعذر تحديد الموقع تلقائيًا، يمكنك اختيار مدينتك من القائمة")
+                    showBanner("تعذر تحديد الموقع تلقائيًا، يمكنك اختيار مدينتك من القائمة بدون نت")
                 }
             }
             .addOnFailureListener {
                 _isDetectingLocation.value = false
-                showBanner("تعذر الوصول للموقع، اختر مدينتك يدويًا")
+                showBanner("تعذر الوصول للموقع، اختر مدينتك من القائمة بدون نت")
             }
     }
 
@@ -199,10 +213,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Suppress("DEPRECATION")
             val addresses = geocoder.getFromLocation(lat, lng, 1)
             val addr = addresses?.firstOrNull()
-            addr?.locality ?: addr?.adminArea ?: addr?.countryName ?: "موقعي الحالي"
+            val resolved = addr?.locality ?: addr?.adminArea ?: addr?.countryName
+            if (!resolved.isNullOrBlank()) return@withContext resolved
         } catch (_: Exception) {
-            "موقعي الحالي"
         }
+        // Offline Haversine fallback to closest built-in city
+        val nearest = QuranCatalog.cities.minByOrNull { city ->
+            haversineKm(lat, lng, city.latitude, city.longitude)
+        }
+        if (nearest != null) "${nearest.arabicName} (موقعي)" else "موقعي الحالي"
+    }
+
+    private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = sin(dLat / 2) * sin(dLat / 2) +
+            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+            sin(dLon / 2) * sin(dLon / 2)
+        return 2 * r * atan2(sqrt(a), sqrt(1 - a))
     }
 
     fun updateCalculationMethod(method: CalculationMethod) {
@@ -226,10 +255,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun rescheduleAlarms() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val current = prefsRepo.getCurrentSettings()
+            AlarmScheduler.schedulePrayerAlarms(getApplication(), current)
+        }
+    }
+
     fun testAdhanNow() {
+        val appContext = getApplication<Application>()
         val current = settings.value
-        audioManager.playAdhanPreview(current.adhanVoice)
-        showBanner("جاري تشغيل ${current.adhanVoice.arabicName} — يمكنك الإيقاف بالضغط على إيقاف")
+        val prayerLabel = homeUiState.value.schedule?.nextPrayer?.prayer?.arabicName ?: "الصلاة"
+        val serviceIntent = Intent(appContext, AdhanPlaybackService::class.java).apply {
+            putExtra(AdhanPlaybackService.EXTRA_PRAYER_NAME, prayerLabel)
+            putExtra(AdhanPlaybackService.EXTRA_VOICE_ID, current.adhanVoice.id)
+            putExtra(AdhanPlaybackService.EXTRA_TTS_VOICE_ID, current.adhkarVoiceId)
+        }
+        val started = try {
+            ContextCompat.startForegroundService(appContext, serviceIntent)
+            true
+        } catch (_: Exception) {
+            false
+        }
+        if (!started) {
+            audioManager.playAdhanPreview(current.adhanVoice)
+        }
+        showBanner("جاري تشغيل ${current.adhanVoice.arabicName} بصوت الأذان — يمكنك الإيقاف بالضغط على إيقاف")
     }
 
     fun stopAdhanNow() {
@@ -240,6 +291,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             getApplication<Application>().startService(stopIntent)
         } catch (_: Exception) {
+        }
+    }
+
+    fun downloadAdhanOffline(voice: AdhanVoice) {
+        viewModelScope.launch {
+            val res = offlineAudioRepo.downloadAdhanVoice(voice)
+            if (res.isSuccess) {
+                showBanner("تم حفظ ${voice.arabicName} للعمل بدون إنترنت ✓")
+            } else {
+                showBanner("تأكد من الاتصال بالإنترنت لتحميل صوت الأذان")
+            }
+        }
+    }
+
+    fun downloadSurahOffline(reciterId: String, surahNumber: Int) {
+        val reciter = QuranCatalog.reciters.find { it.id == reciterId } ?: return
+        viewModelScope.launch {
+            val res = offlineAudioRepo.downloadSurah(reciter, surahNumber)
+            if (res.isFailure) {
+                showBanner("تعذّر التحميل. تأكد من الاتصال بالإنترنت وحاول مرة أخرى.")
+            }
+        }
+    }
+
+    fun downloadBatchSurahsOffline(reciterId: String, surahNumbers: List<Int>) {
+        val reciter = QuranCatalog.reciters.find { it.id == reciterId } ?: return
+        viewModelScope.launch {
+            if (!offlineAudioRepo.isNetworkConnected()) {
+                showBanner("اتصل بالإنترنت أولاً لتحميل السور، وبعدها ستعمل 100% بدون نت")
+                return@launch
+            }
+            var successCount = 0
+            for (surah in surahNumbers) {
+                if (!offlineAudioRepo.isSurahAvailableOffline(reciter.id, surah)) {
+                    val res = offlineAudioRepo.downloadSurah(reciter, surah)
+                    if (res.isSuccess) successCount++
+                }
+            }
+            if (successCount > 0) {
+                showBanner("تم تحميل ${PrayerTimeCalculator.toArabicDigits(successCount)} سورة بصوت ${reciter.arabicName} بدون نت ✓")
+            }
+        }
+    }
+
+    fun deleteDownloadedSurah(reciterId: String, surahNumber: Int) {
+        viewModelScope.launch {
+            offlineAudioRepo.deleteDownloadedSurah(reciterId, surahNumber)
         }
     }
 
@@ -282,6 +380,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateAdhkarVoice(voiceId: String) {
+        viewModelScope.launch {
+            prefsRepo.updateAdhkarVoicePreferences(voiceId = voiceId)
+        }
+    }
+
+    fun updateAdhkarQuranReciter(reciterId: String) {
+        viewModelScope.launch {
+            prefsRepo.updateAdhkarVoicePreferences(quranReciterId = reciterId)
+        }
+    }
+
+    fun updateAdhkarChimeBeforeVoice(enabled: Boolean) {
+        viewModelScope.launch {
+            prefsRepo.updateAdhkarVoicePreferences(chimeBeforeVoice = enabled)
+        }
+    }
+
     fun triggerDhikrNow() {
         viewModelScope.launch {
             val current = prefsRepo.getCurrentSettings()
@@ -291,13 +407,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val nextIdx = (idx + 1) % phrases.size
 
             prefsRepo.updatePeriodicDhikr(phraseIndex = nextIdx)
-            DhikrReminderReceiver.postDhikrNotification(
-                getApplication(),
-                phrase,
-                current.periodicDhikrMode
-            )
-            if (current.periodicDhikrMode == PeriodicDhikrMode.VOICE_AND_NOTIFICATION) {
-                dhikrSpeaker.speakDhikr(phrase)
+            if (current.periodicDhikrMode.includesNotification) {
+                DhikrReminderReceiver.postDhikrNotification(
+                    getApplication(),
+                    phrase,
+                    current.periodicDhikrMode
+                )
+            }
+            if (current.periodicDhikrMode.includesVoice) {
+                dhikrSpeaker.speakDhikr(
+                    phrase = phrase,
+                    voiceId = current.adhkarVoiceId,
+                    chimeBefore = current.adhkarChimeBeforeVoice,
+                    useMediaUsage = true
+                )
             }
             showBanner(phrase)
         }

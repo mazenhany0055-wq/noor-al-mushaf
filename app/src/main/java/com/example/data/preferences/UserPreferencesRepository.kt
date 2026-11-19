@@ -49,7 +49,10 @@ data class UserSettings(
     val darkModeSetting: String = "system",
     val tasbihSoundEnabled: Boolean = true,
     val tasbihVibrationEnabled: Boolean = true,
-    val selectedTasbihId: Int = 1
+    val selectedTasbihId: Int = 1,
+    val adhkarVoiceId: String = "calm_deep",
+    val adhkarQuranReciterId: String = "yasser",
+    val adhkarChimeBeforeVoice: Boolean = false
 ) {
     fun enabledPrayersMap(): Map<PrayerName, Boolean> = mapOf(
         PrayerName.FAJR to fajrAdhan,
@@ -89,6 +92,9 @@ class UserPreferencesRepository(private val context: Context) {
         val TASBIH_SOUND = booleanPreferencesKey("tasbih_sound")
         val TASBIH_VIBRATION = booleanPreferencesKey("tasbih_vibration")
         val SELECTED_TASBIH_ID = intPreferencesKey("selected_tasbih_id")
+        val ADHKAR_VOICE_ID = stringPreferencesKey("adhkar_voice_id")
+        val ADHKAR_QURAN_RECITER_ID = stringPreferencesKey("adhkar_quran_reciter_id")
+        val ADHKAR_CHIME_BEFORE_VOICE = booleanPreferencesKey("adhkar_chime_before_voice")
     }
 
     val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -118,7 +124,10 @@ class UserPreferencesRepository(private val context: Context) {
             darkModeSetting = prefs[Keys.DARK_MODE_SETTING] ?: "system",
             tasbihSoundEnabled = prefs[Keys.TASBIH_SOUND] ?: true,
             tasbihVibrationEnabled = prefs[Keys.TASBIH_VIBRATION] ?: true,
-            selectedTasbihId = prefs[Keys.SELECTED_TASBIH_ID] ?: 1
+            selectedTasbihId = prefs[Keys.SELECTED_TASBIH_ID] ?: 1,
+            adhkarVoiceId = prefs[Keys.ADHKAR_VOICE_ID] ?: "calm_deep",
+            adhkarQuranReciterId = prefs[Keys.ADHKAR_QURAN_RECITER_ID] ?: "yasser",
+            adhkarChimeBeforeVoice = prefs[Keys.ADHKAR_CHIME_BEFORE_VOICE] ?: false
         )
     }
 
@@ -202,6 +211,18 @@ class UserPreferencesRepository(private val context: Context) {
             sound?.let { prefs[Keys.TASBIH_SOUND] = it }
             vibration?.let { prefs[Keys.TASBIH_VIBRATION] = it }
             selectedId?.let { prefs[Keys.SELECTED_TASBIH_ID] = it }
+        }
+    }
+
+    suspend fun updateAdhkarVoicePreferences(
+        voiceId: String? = null,
+        quranReciterId: String? = null,
+        chimeBeforeVoice: Boolean? = null
+    ) {
+        context.dataStore.edit { prefs ->
+            voiceId?.let { prefs[Keys.ADHKAR_VOICE_ID] = it }
+            quranReciterId?.let { prefs[Keys.ADHKAR_QURAN_RECITER_ID] = it }
+            chimeBeforeVoice?.let { prefs[Keys.ADHKAR_CHIME_BEFORE_VOICE] = it }
         }
     }
 }

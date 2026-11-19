@@ -11,11 +11,13 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.example.data.catalog.QuranCatalog
 import com.example.data.remote.AlQuranApiService
+import com.example.data.repository.OfflineAudioRepository
 import com.example.domain.model.AdhanVoice
 import com.example.domain.model.ReciterInfo
 import kotlinx.coroutines.CoroutineScope
@@ -51,7 +53,8 @@ data class AudioPlaybackState(
 @OptIn(UnstableApi::class)
 class QuranAudioManager(
     context: Context,
-    private val apiService: AlQuranApiService = AlQuranApiService.create()
+    private val apiService: AlQuranApiService = AlQuranApiService.create(),
+    private val offlineAudioRepository: OfflineAudioRepository = OfflineAudioRepository(context)
 ) {
 
     private val appContext = context.applicationContext
@@ -62,6 +65,8 @@ class QuranAudioManager(
         .setAllowCrossProtocolRedirects(true)
         .setConnectTimeoutMs(8_000)
         .setReadTimeoutMs(10_000)
+
+    private val dataSourceFactory = DefaultDataSource.Factory(appContext, httpFactory)
 
     private var _quranPlayer: ExoPlayer? = null
     private var _adhanPlayer: ExoPlayer? = null
@@ -83,7 +88,7 @@ class QuranAudioManager(
     private fun getOrCreateQuranPlayer(): ExoPlayer {
         _quranPlayer?.let { return it }
         val player = ExoPlayer.Builder(appContext)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -102,7 +107,7 @@ class QuranAudioManager(
     private fun getOrCreateAdhanPlayer(): ExoPlayer {
         _adhanPlayer?.let { return it }
         val player = ExoPlayer.Builder(appContext)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_ALARM)
@@ -228,8 +233,37 @@ class QuranAudioManager(
             )
         }
 
-        // Immediately prepare primary Surah MP3 stream(s) on main thread for zero-latency start,
-        // and concurrently resolve live AlQuran Cloud Ayah audio playlist as seamless fallback.
+        // 1. Check offline downloaded/bundled audio FIRST for true 100% offline playback!
+        val offlineUri = offlineAudioRepository.getOfflineSurahUri(reciter.id, surah.number)
+        if (offlineUri != null) {
+            val offlineItem = buildSurahMediaItemFromUri(offlineUri, surah.arabicName, reciter.arabicName)
+            val player = try {
+                getOrCreateQuranPlayer()
+            } catch (_: Exception) {
+                playViaMediaPlayerFallbackUri(offlineUri)
+                return
+            }
+            stopFallbackMediaPlayer()
+            player.setMediaItems(listOf(offlineItem), true)
+            player.prepare()
+            player.setPlaybackSpeed(_state.value.playbackSpeed)
+            player.play()
+            return
+        }
+
+        // 2. If offline and not downloaded, fail gracefully with clear guidance (or fall back to another offline reciter if available)
+        if (!offlineAudioRepository.isNetworkConnected()) {
+            _state.update {
+                it.copy(
+                    isBuffering = false,
+                    isPlaying = false,
+                    errorMessage = "لا يوجد اتصال بالإنترنت، وهذه السورة غير محمّلة بعد. يمكنك الاستماع للسور المحمّلة بدون نت أو تحميلها عند توفر الاتصال."
+                )
+            }
+            return
+        }
+
+        // 3. Online streaming with deterministic fallbacks
         val directSurahUrls = reciter.surahAudioUrls(surah.number)
         val primaryItems = directSurahUrls.firstOrNull()?.let { url ->
             listOf(buildSurahMediaItem(url, surah.arabicName, reciter.arabicName))
@@ -237,7 +271,6 @@ class QuranAudioManager(
         directSurahUrls.drop(1).forEach { mirrorUrl ->
             fallbackQueue.addLast(listOf(buildSurahMediaItem(mirrorUrl, surah.arabicName, reciter.arabicName)))
         }
-        // Enqueue deterministic EveryAyah Ayah-1..N fallback & AlQuran Cloud CDN safety net synchronously
         val deterministicEveryAyah = (1..surah.ayahCount).mapNotNull { ayahIdx ->
             reciter.everyAyahUrl(surah.number, ayahIdx)?.let { url ->
                 val metadata = MediaMetadata.Builder()
@@ -343,12 +376,16 @@ class QuranAudioManager(
     }
 
     private fun buildSurahMediaItem(url: String, surahName: String, reciterName: String): MediaItem {
+        return buildSurahMediaItemFromUri(Uri.parse(url), surahName, reciterName)
+    }
+
+    private fun buildSurahMediaItemFromUri(uri: Uri, surahName: String, reciterName: String): MediaItem {
         val metadata = MediaMetadata.Builder()
             .setTitle("سورة $surahName")
             .setArtist(reciterName)
             .build()
         return MediaItem.Builder()
-            .setUri(Uri.parse(url))
+            .setUri(uri)
             .setMediaMetadata(metadata)
             .build()
     }
@@ -456,9 +493,24 @@ class QuranAudioManager(
         if (_quranPlayer?.isPlaying == true) {
             _quranPlayer?.pause()
         }
+        // Check offline bundled/downloaded Adhan FIRST!
+        val offlineUri = offlineAudioRepository.getOfflineAdhanUri(voice)
+        if (offlineUri != null) {
+            adhanFallbackUrl = null
+            try {
+                val player = getOrCreateAdhanPlayer()
+                _isAdhanPreviewPlaying.value = true
+                player.setMediaItem(MediaItem.fromUri(offlineUri))
+                player.prepare()
+                player.play()
+                return
+            } catch (_: Exception) {
+            }
+        }
+
         val url = voice.streamUrl
         adhanFallbackUrl = voice.fallbackUrl
-        if (url != null) {
+        if (url != null && offlineAudioRepository.isNetworkConnected()) {
             try {
                 val player = getOrCreateAdhanPlayer()
                 _isAdhanPreviewPlaying.value = true
@@ -503,6 +555,10 @@ class QuranAudioManager(
     }
 
     private fun playViaMediaPlayerFallback(url: String) {
+        playViaMediaPlayerFallbackUri(Uri.parse(url))
+    }
+
+    private fun playViaMediaPlayerFallbackUri(uri: Uri) {
         stopFallbackMediaPlayer()
         try {
             val mp = android.media.MediaPlayer().apply {
@@ -512,7 +568,7 @@ class QuranAudioManager(
                         .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
-                setDataSource(url)
+                setDataSource(appContext, uri)
                 setOnPreparedListener {
                     it.start()
                     _state.update { st ->

@@ -32,30 +32,35 @@ enum class AdhanVoice(
     val id: String,
     val arabicName: String,
     val streamUrl: String?,
-    val fallbackUrl: String? = null
+    val fallbackUrl: String? = null,
+    val bundledAssetPath: String? = null
 ) {
     MAKKAH(
         id = "makkah",
         arabicName = "أذان الحرم المكي",
         streamUrl = "https://www.islamcan.com/audio/adhan/azan1.mp3",
-        fallbackUrl = "https://cdn.aladhan.com/audio/adhans/a1.mp3"
+        fallbackUrl = "https://cdn.aladhan.com/audio/adhans/a1.mp3",
+        bundledAssetPath = "audio/adhan_makkah.mp3"
     ),
     ALAFASY(
         id = "alafasy",
         arabicName = "مشاري راشد العفاسي",
         streamUrl = "https://cdn.aladhan.com/audio/adhans/a9.mp3",
-        fallbackUrl = "https://cdn.aladhan.com/audio/adhans/a4.mp3"
+        fallbackUrl = "https://cdn.aladhan.com/audio/adhans/a4.mp3",
+        bundledAssetPath = "audio/adhan_alafasy.mp3"
     ),
     MADINAH(
         id = "madinah",
         arabicName = "أذان المسجد النبوي",
         streamUrl = "https://www.islamcan.com/audio/adhan/azan2.mp3",
-        fallbackUrl = "https://cdn.aladhan.com/audio/adhans/a2.mp3"
+        fallbackUrl = "https://cdn.aladhan.com/audio/adhans/a2.mp3",
+        bundledAssetPath = "audio/adhan_madinah.mp3"
     ),
     SYSTEM_TONE(
         id = "tone",
         arabicName = "تنبيه نغمة الجهاز فقط",
-        streamUrl = null
+        streamUrl = null,
+        bundledAssetPath = null
     );
 
     companion object {
@@ -177,16 +182,69 @@ data class DhikrItem(
     val category: AdhkarCategory,
     val text: String,
     val targetCount: Int,
-    val virtueOrSource: String
+    val virtueOrSource: String,
+    val surahNumber: Int? = null,
+    val ayahNumbers: List<Int> = emptyList()
 )
 
-enum class PeriodicDhikrMode(val id: String, val arabicLabel: String) {
-    VOICE_AND_NOTIFICATION("voice", "صوت (نطق الذكر) + إشعار"),
-    CHIME_AND_NOTIFICATION("chime", "نغمة تنبيه + إشعار"),
-    SILENT_NOTIFICATION("silent", "إشعار هادئ فقط");
+enum class PeriodicDhikrMode(
+    val id: String,
+    val arabicLabel: String,
+    val description: String
+) {
+    VOICE_AND_NOTIFICATION(
+        "voice",
+        "صوت القارئ + إشعار على الشاشة",
+        "ينطق الذكر بالصوت مع ظهور إشعار"
+    ),
+    VOICE_ONLY(
+        "voice_only",
+        "صوت القارئ فقط (بدون إشعار)",
+        "ينطق الذكر بالصوت دون إظهار إشعار على الشاشة"
+    ),
+    CHIME_AND_NOTIFICATION(
+        "chime",
+        "نغمة تنبيه + إشعار على الشاشة",
+        "نغمة هادئة مع إشعار مكتوب فقط"
+    ),
+    SILENT_NOTIFICATION(
+        "silent",
+        "إشعار صامت فقط (بدون صوت)",
+        "إشعار مكتوب على الشاشة بدون صوت"
+    );
+
+    val includesVoice: Boolean
+        get() = this == VOICE_AND_NOTIFICATION || this == VOICE_ONLY
+
+    val includesNotification: Boolean
+        get() = this != VOICE_ONLY
 
     companion object {
         fun fromId(id: String): PeriodicDhikrMode =
             entries.find { it.id == id } ?: VOICE_AND_NOTIFICATION
     }
 }
+
+enum class AdhkarVoicePreset(
+    val id: String,
+    val arabicName: String,
+    val description: String,
+    val pitch: Float,
+    val speechRate: Float
+) {
+    CALM_DEEP("calm_deep", "صوت وقور خاشع", "هادئ ومتوازن • بدون نت", 0.84f, 0.84f),
+    CLEAR_STRONG("clear_strong", "صوت جهوري واضح", "نطق قوي وواضح • بدون نت", 0.96f, 0.92f),
+    SLOW_TEACHING("slow_teaching", "صوت متأنٍّ للترديد", "بطيء ومناسب للحفظ • بدون نت", 0.90f, 0.74f),
+    BRISK_REMINDER("brisk", "صوت سريع مختصر", "مناسب للتنبيهات السريعة • بدون نت", 1.02f, 1.05f);
+
+    companion object {
+        fun fromId(id: String): AdhkarVoicePreset? = entries.find { it.id == id }
+    }
+}
+
+data class OfflineTtsVoiceInfo(
+    val id: String,
+    val rawName: String,
+    val displayName: String,
+    val isOfflineReady: Boolean
+)

@@ -122,12 +122,17 @@ private fun NoorAlMushafAppShell(
     val homeUiState by mainViewModel.homeUiState.collectAsStateWithLifecycle()
     val audioState by mainViewModel.audioState.collectAsStateWithLifecycle()
     val settings by mainViewModel.settings.collectAsStateWithLifecycle()
+    val offlineSurahsByReciter by mainViewModel.offlineSurahsByReciter.collectAsStateWithLifecycle()
+    val downloadProgress by mainViewModel.downloadProgress.collectAsStateWithLifecycle()
+    val offlineAdhanIds by mainViewModel.offlineAdhanIds.collectAsStateWithLifecycle()
+    val totalOfflineAudioBytes by mainViewModel.totalOfflineAudioBytes.collectAsStateWithLifecycle()
     val pagesCache by quranViewModel.pagesCache.collectAsStateWithLifecycle()
     val bookmarks by quranViewModel.bookmarks.collectAsStateWithLifecycle()
     val cachedPages by quranViewModel.cachedPageNumbers.collectAsStateWithLifecycle()
     val tasbihItems by tasbihViewModel.items.collectAsStateWithLifecycle()
     val totalLifetimeTasbih by tasbihViewModel.totalLifetimeCount.collectAsStateWithLifecycle()
     val adhkarState by adhkarViewModel.uiState.collectAsStateWithLifecycle()
+    val availableSystemVoices by adhkarViewModel.availableSystemVoices.collectAsStateWithLifecycle()
 
     val isFullScreenReader = currentRoute?.startsWith("mushaf_reader") == true
 
@@ -222,15 +227,18 @@ private fun NoorAlMushafAppShell(
                         HomePrayerScreen(
                             uiState = homeUiState,
                             countdownFlow = mainViewModel.countdownState,
+                            offlineAdhanIds = offlineAdhanIds,
                             onSelectCity = { mainViewModel.selectCity(it) },
                             onDetectGps = { mainViewModel.detectGpsLocation() },
                             onSelectMethod = { mainViewModel.updateCalculationMethod(it) },
                             onSelectAdhanVoice = { mainViewModel.updateAdhanVoice(it) },
+                            onDownloadAdhanOffline = { mainViewModel.downloadAdhanOffline(it) },
                             onTogglePrayerAdhan = { prayer, enabled ->
                                 mainViewModel.togglePrayerAdhan(prayer, enabled)
                             },
                             onTestAdhan = { mainViewModel.testAdhanNow() },
                             onStopAdhan = { mainViewModel.stopAdhanNow() },
+                            onRescheduleAlarms = { mainViewModel.rescheduleAlarms() },
                             onTogglePeriodicDhikr = { mainViewModel.setPeriodicDhikrEnabled(it) },
                             onOpenMushafPage = { page ->
                                 navController.navigate(NoorRoutes.mushafReader(page))
@@ -246,6 +254,7 @@ private fun NoorAlMushafAppShell(
                             lastReadPage = settings.lastReadPage,
                             bookmarks = bookmarks,
                             cachedPagesCount = cachedPages.size,
+                            isFullMushafBundled = mainViewModel.isFullMushafBundled,
                             onOpenMushafPage = { page ->
                                 navController.navigate(NoorRoutes.mushafReader(page))
                             },
@@ -260,9 +269,21 @@ private fun NoorAlMushafAppShell(
                         AudioPlayerScreen(
                             selectedReciterId = settings.selectedReciterId,
                             audioState = audioState,
+                            offlineSurahsByReciter = offlineSurahsByReciter,
+                            downloadProgress = downloadProgress,
+                            totalOfflineBytes = totalOfflineAudioBytes,
                             onSelectReciter = { mainViewModel.updateSelectedReciter(it) },
                             onPlaySurah = { surahNum, reciterId ->
                                 mainViewModel.audioManager.playSurah(surahNum, reciterId)
+                            },
+                            onDownloadSurah = { reciterId, surahNum ->
+                                mainViewModel.downloadSurahOffline(reciterId, surahNum)
+                            },
+                            onDownloadBatch = { reciterId, list ->
+                                mainViewModel.downloadBatchSurahsOffline(reciterId, list)
+                            },
+                            onDeleteDownloadedSurah = { reciterId, surahNum ->
+                                mainViewModel.deleteDownloadedSurah(reciterId, surahNum)
                             },
                             onTogglePlayPause = { mainViewModel.audioManager.togglePlayPause() },
                             onStop = { mainViewModel.audioManager.stopPlayback() },
@@ -294,13 +315,36 @@ private fun NoorAlMushafAppShell(
                             adhkarState = adhkarState,
                             settings = settings,
                             countdownFlow = mainViewModel.countdownState,
+                            availableSystemVoices = availableSystemVoices,
                             onSelectCategory = { adhkarViewModel.selectCategory(it) },
                             onDecrementDhikr = { adhkarViewModel.decrementDhikr(it) },
                             onResetCategory = { adhkarViewModel.resetCategory() },
                             onTogglePeriodicDhikr = { mainViewModel.setPeriodicDhikrEnabled(it) },
                             onSelectInterval = { mainViewModel.setPeriodicDhikrInterval(it) },
                             onSelectMode = { mainViewModel.setPeriodicDhikrMode(it) },
-                            onTestDhikrNow = { mainViewModel.triggerDhikrNow() }
+                            onTestDhikrNow = { mainViewModel.triggerDhikrNow() },
+                            onSelectAdhkarVoice = { mainViewModel.updateAdhkarVoice(it) },
+                            onSelectAdhkarQuranReciter = { mainViewModel.updateAdhkarQuranReciter(it) },
+                            onToggleChimeBeforeVoice = { mainViewModel.updateAdhkarChimeBeforeVoice(it) },
+                            onPreviewAdhkarVoice = { voiceId ->
+                                adhkarViewModel.previewVoice(voiceId, settings.adhkarChimeBeforeVoice)
+                            },
+                            onSpeakSingleDhikr = { item ->
+                                adhkarViewModel.speakSingleDhikr(
+                                    item = item,
+                                    voiceId = settings.adhkarVoiceId,
+                                    quranReciterId = settings.adhkarQuranReciterId,
+                                    chimeBefore = settings.adhkarChimeBeforeVoice
+                                )
+                            },
+                            onToggleAutoPlayAll = {
+                                adhkarViewModel.toggleAutoPlayCategory(
+                                    voiceId = settings.adhkarVoiceId,
+                                    quranReciterId = settings.adhkarQuranReciterId,
+                                    chimeBefore = settings.adhkarChimeBeforeVoice
+                                )
+                            },
+                            onStopSpeaking = { adhkarViewModel.stopSpeaking() }
                         )
                     }
 

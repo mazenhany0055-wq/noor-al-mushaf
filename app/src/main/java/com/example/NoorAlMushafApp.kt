@@ -13,8 +13,12 @@ class NoorAlMushafApp : Application() {
     val database: NoorDatabase by lazy { NoorDatabase.getInstance(this) }
     val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository(this) }
     val apiService: AlQuranApiService by lazy { AlQuranApiService.create() }
+    val offlineAudioRepository: com.example.data.repository.OfflineAudioRepository by lazy {
+        com.example.data.repository.OfflineAudioRepository(this)
+    }
     val quranRepository: QuranRepository by lazy {
         QuranRepository(
+            context = this,
             quranPageDao = database.quranPageDao(),
             bookmarkDao = database.bookmarkDao(),
             apiService = apiService
