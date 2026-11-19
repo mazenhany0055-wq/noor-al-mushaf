@@ -1,10 +1,9 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.speech.tts.TextToSpeech
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -34,6 +33,8 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AlarmOn
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
@@ -74,9 +75,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.catalog.QuranCatalog
 import com.example.data.preferences.UserSettings
 import com.example.domain.model.AdhkarCategory
-import com.example.domain.model.AdhkarVoicePreset
+import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.DhikrItem
-import com.example.domain.model.OfflineTtsVoiceInfo
 import com.example.domain.model.PeriodicDhikrMode
 import com.example.domain.prayer.PrayerTimeCalculator
 import com.example.ui.theme.AmiriFontFamily
@@ -89,7 +89,8 @@ fun AdhkarScreen(
     adhkarState: AdhkarUiState,
     settings: UserSettings,
     countdownFlow: StateFlow<CountdownUiState>,
-    availableSystemVoices: List<OfflineTtsVoiceInfo>,
+    offlineAdhkarSessionKeys: Set<String>,
+    downloadProgress: Map<String, Float>,
     onSelectCategory: (AdhkarCategory) -> Unit,
     onDecrementDhikr: (DhikrItem) -> Unit,
     onResetCategory: () -> Unit,
@@ -101,6 +102,8 @@ fun AdhkarScreen(
     onSelectAdhkarQuranReciter: (String) -> Unit,
     onToggleChimeBeforeVoice: (Boolean) -> Unit,
     onPreviewAdhkarVoice: (String) -> Unit,
+    onPlaySheikhSession: (AdhkarSheikhVoice, Boolean) -> Boolean,
+    onDownloadSheikhSession: (AdhkarSheikhVoice, Boolean) -> Unit,
     onSpeakSingleDhikr: (DhikrItem) -> Unit,
     onToggleAutoPlayAll: () -> Unit,
     onStopSpeaking: () -> Unit
@@ -114,14 +117,12 @@ fun AdhkarScreen(
         if (granted) onTogglePeriodicDhikr(true)
     }
 
-    val selectedVoiceLabel = remember(settings.adhkarVoiceId, availableSystemVoices) {
-        AdhkarVoicePreset.fromId(settings.adhkarVoiceId)?.arabicName
-            ?: availableSystemVoices.find { it.id == settings.adhkarVoiceId }?.displayName
-            ?: AdhkarVoicePreset.CALM_DEEP.arabicName
+    val selectedSheikh = remember(settings.adhkarVoiceId) {
+        AdhkarSheikhVoice.fromId(settings.adhkarVoiceId)
     }
 
     val selectedQuranReciterName = remember(settings.adhkarQuranReciterId) {
-        QuranCatalog.reciters.find { it.id == settings.adhkarQuranReciterId }?.arabicName ?: "ياسر الدوسري"
+        QuranCatalog.reciters.find { it.id == settings.adhkarQuranReciterId }?.arabicName ?: "مشاري راشد العفاسي"
     }
 
     Box(
@@ -135,7 +136,7 @@ fun AdhkarScreen(
             contentPadding = PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Card 1: Adhkar Reciter & Offline Voice Selection
+            // Card 1: Real Human Sheikh Voices & Full Morning/Evening Sessions
             item {
                 Card(
                     shape = RoundedCornerShape(22.dp),
@@ -157,18 +158,18 @@ fun AdhkarScreen(
                                 imageVector = Icons.Default.RecordVoiceOver,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(26.dp)
+                                modifier = Modifier.size(28.dp)
                             )
                             Spacer(Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "قارئ وصوت الأذكار (بدون نت)",
+                                    text = "أصوات الشيوخ الحقيقيين في الأذكار",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
                                 Text(
-                                    text = "الصوت الحالي: $selectedVoiceLabel • الآيات: الشيخ $selectedQuranReciterName",
+                                    text = "${selectedSheikh.arabicName} • الآيات: $selectedQuranReciterName",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                                 )
@@ -189,13 +190,13 @@ fun AdhkarScreen(
                             ) {
                                 Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("اختيار القارئ والصوت")
+                                Text("اختيار الشيخ")
                             }
 
                             OutlinedButton(
-                                onClick = { onPreviewAdhkarVoice(settings.adhkarVoiceId) },
+                                onClick = { onPreviewAdhkarVoice(selectedSheikh.id) },
                                 modifier = Modifier
-                                    .weight(0.8f)
+                                    .weight(0.9f)
                                     .testTag("preview_adhkar_voice_button")
                             ) {
                                 Icon(
@@ -204,7 +205,104 @@ fun AdhkarScreen(
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(Modifier.width(4.dp))
-                                Text("تجربة")
+                                Text("تجربة صوت الشيخ")
+                            }
+                        }
+
+                        if (selectedSheikh.morningSessionUrl != null || selectedSheikh.eveningSessionUrl != null) {
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.14f)
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = "الاستماع الكامل لأذكار الصباح والمساء بصوت ${selectedSheikh.arabicName}:",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(Modifier.height(8.dp))
+
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (selectedSheikh.morningSessionUrl != null) {
+                                    SheikhSessionRow(
+                                        sheikh = selectedSheikh,
+                                        isMorning = true,
+                                        isOffline = offlineAdhkarSessionKeys.contains("${selectedSheikh.id}_morning"),
+                                        progress = downloadProgress["session:${selectedSheikh.id}_morning"],
+                                        isPlaying = adhkarState.activeSessionLabel == "${selectedSheikh.arabicName} • أذكار الصباح كاملة",
+                                        onPlay = {
+                                            val ok = onPlaySheikhSession(selectedSheikh, true)
+                                            if (!ok) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "اتصل بالإنترنت أولاً أو حمّل أذكار الصباح لتعمل بدون نت",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        },
+                                        onDownload = { onDownloadSheikhSession(selectedSheikh, true) }
+                                    )
+                                }
+                                if (selectedSheikh.eveningSessionUrl != null) {
+                                    SheikhSessionRow(
+                                        sheikh = selectedSheikh,
+                                        isMorning = false,
+                                        isOffline = offlineAdhkarSessionKeys.contains("${selectedSheikh.id}_evening"),
+                                        progress = downloadProgress["session:${selectedSheikh.id}_evening"],
+                                        isPlaying = adhkarState.activeSessionLabel == "${selectedSheikh.arabicName} • أذكار المساء كاملة",
+                                        onPlay = {
+                                            val ok = onPlaySheikhSession(selectedSheikh, false)
+                                            if (!ok) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "اتصل بالإنترنت أولاً أو حمّل أذكار المساء لتعمل بدون نت",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        },
+                                        onDownload = { onDownloadSheikhSession(selectedSheikh, false) }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (adhkarState.activeSessionLabel != null) {
+                            Spacer(Modifier.height(10.dp))
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.VolumeUp,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "جاري التشغيل: ${adhkarState.activeSessionLabel}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = onStopSpeaking,
+                                        modifier = Modifier.testTag("stop_sheikh_session_button")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Stop,
+                                            contentDescription = "إيقاف التشغيل",
+                                            tint = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -237,7 +335,7 @@ fun AdhkarScreen(
                             Spacer(Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "المذكّر التلقائي (يعمل بدون نت)",
+                                    text = "المذكّر التلقائي بصوت حقيقي (بدون نت)",
                                     style = MaterialTheme.typography.titleLarge,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
@@ -372,7 +470,7 @@ fun AdhkarScreen(
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(6.dp))
-                            Text("تشغيل الذكر الآن (تجربة)")
+                            Text("تشغيل الذكر الآن بصوت الشيخ")
                         }
                     }
                 }
@@ -478,21 +576,20 @@ fun AdhkarScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (isSpeakingThis) "جاري قراءة الذكر الآن..." else item.virtueOrSource,
+                                text = if (isSpeakingThis) "جاري تشغيل صوت الشيخ..." else item.virtueOrSource,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (isSpeakingThis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f)
                             )
                             Spacer(Modifier.width(8.dp))
 
-                            // Speak/Stop Button for this individual Dhikr
                             IconButton(
                                 onClick = { onSpeakSingleDhikr(item) },
                                 modifier = Modifier.testTag("speak_dhikr_${item.id}")
                             ) {
                                 Icon(
                                     imageVector = if (isSpeakingThis) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
-                                    contentDescription = if (isSpeakingThis) "إيقاف القراءة" else "استماع للذكر بالصوت",
+                                    contentDescription = if (isSpeakingThis) "إيقاف القراءة" else "استماع للذكر بصوت الشيخ",
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -543,45 +640,123 @@ fun AdhkarScreen(
     }
 
     if (showVoicePickerDialog) {
-        AdhkarVoicePickerDialog(
-            selectedVoiceId = settings.adhkarVoiceId,
+        AdhkarSheikhPickerDialog(
+            selectedSheikhId = selectedSheikh.id,
             selectedQuranReciterId = settings.adhkarQuranReciterId,
             chimeBeforeVoice = settings.adhkarChimeBeforeVoice,
-            availableSystemVoices = availableSystemVoices,
-            onSelectVoice = { id ->
-                onSelectAdhkarVoice(id)
-                onPreviewAdhkarVoice(id)
+            onSelectSheikh = { sheikh ->
+                onSelectAdhkarVoice(sheikh.id)
+                onPreviewAdhkarVoice(sheikh.id)
             },
             onSelectQuranReciter = onSelectAdhkarQuranReciter,
             onToggleChime = onToggleChimeBeforeVoice,
-            onPreviewVoice = onPreviewAdhkarVoice,
-            onInstallSystemVoices = {
-                try {
-                    context.startActivity(Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA))
-                } catch (_: Exception) {
-                }
-            },
+            onPreviewSheikh = { sheikh -> onPreviewAdhkarVoice(sheikh.id) },
             onDismiss = { showVoicePickerDialog = false }
         )
     }
 }
 
 @Composable
-private fun AdhkarVoicePickerDialog(
-    selectedVoiceId: String,
+private fun SheikhSessionRow(
+    sheikh: AdhkarSheikhVoice,
+    isMorning: Boolean,
+    isOffline: Boolean,
+    progress: Float?,
+    isPlaying: Boolean,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit
+) {
+    val label = if (isMorning) "أذكار الصباح كاملة" else "أذكار المساء كاملة"
+    val suffix = if (isMorning) "morning" else "evening"
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(
+                    onClick = onPlay,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("play_session_${sheikh.id}_$suffix")
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (isPlaying) "إيقاف $label" else label)
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                if (isOffline) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = CircleShape
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.CloudDone,
+                                contentDescription = "محفوظ بدون نت",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "بدون نت",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                } else {
+                    IconButton(
+                        onClick = onDownload,
+                        modifier = Modifier.testTag("download_session_${sheikh.id}_$suffix")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "حفظ $label للعمل بدون نت",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            if (progress != null) {
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdhkarSheikhPickerDialog(
+    selectedSheikhId: String,
     selectedQuranReciterId: String,
     chimeBeforeVoice: Boolean,
-    availableSystemVoices: List<OfflineTtsVoiceInfo>,
-    onSelectVoice: (String) -> Unit,
+    onSelectSheikh: (AdhkarSheikhVoice) -> Unit,
     onSelectQuranReciter: (String) -> Unit,
     onToggleChime: (Boolean) -> Unit,
-    onPreviewVoice: (String) -> Unit,
-    onInstallSystemVoices: () -> Unit,
+    onPreviewSheikh: (AdhkarSheikhVoice) -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("اختيار قارئ وصوت الأذكار") },
+        title = { Text("اختيار قارئ الأذكار (أصوات حقيقية)") },
         text = {
             Column(
                 modifier = Modifier
@@ -590,50 +765,26 @@ private fun AdhkarVoicePickerDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "أصوات النطق التلقائي بدون نت:",
+                    text = "اختر الشيخ الحقيقي للأذكار:",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
 
-                AdhkarVoicePreset.entries.forEach { preset ->
-                    val isSelected = selectedVoiceId == preset.id
+                AdhkarSheikhVoice.entries.forEach { sheikh ->
+                    val isSelected = selectedSheikhId == sheikh.id
                     VoiceSelectionRow(
-                        title = preset.arabicName,
-                        subtitle = preset.description,
+                        title = sheikh.arabicName,
+                        subtitle = sheikh.description,
                         isSelected = isSelected,
-                        onSelect = { onSelectVoice(preset.id) },
-                        onPreview = { onPreviewVoice(preset.id) }
+                        tag = "sheikh_option_${sheikh.id}",
+                        onSelect = { onSelectSheikh(sheikh) },
+                        onPreview = { onPreviewSheikh(sheikh) }
                     )
-                }
-
-                if (availableSystemVoices.isNotEmpty()) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    Text(
-                        text = "أصوات الجهاز العربية المكتشفة:",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    availableSystemVoices.forEach { sysVoice ->
-                        VoiceSelectionRow(
-                            title = sysVoice.displayName,
-                            subtitle = "صوت مثبت على الهاتف",
-                            isSelected = selectedVoiceId == sysVoice.id,
-                            onSelect = { onSelectVoice(sysVoice.id) },
-                            onPreview = { onPreviewVoice(sysVoice.id) }
-                        )
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = onInstallSystemVoices,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("إضافة / تحميل أصوات عربية من إعدادات الجهاز")
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                 Text(
-                    text = "قارئ آية الكرسي والمعوذات والأدعية القرآنية:",
+                    text = "قارئ الآيات القرآنية في الأذكار:",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -654,7 +805,7 @@ private fun AdhkarVoicePickerDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "نغمة تنبيه خفيفة قبل نطق الذكر",
+                        text = "نغمة تنبيه خفيفة قبل الأذكار",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f)
                     )
@@ -678,6 +829,7 @@ private fun VoiceSelectionRow(
     title: String,
     subtitle: String,
     isSelected: Boolean,
+    tag: String,
     onSelect: () -> Unit,
     onPreview: () -> Unit
 ) {
@@ -687,6 +839,7 @@ private fun VoiceSelectionRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onSelect() }
+            .testTag(tag)
     ) {
         Row(
             modifier = Modifier
@@ -709,7 +862,7 @@ private fun VoiceSelectionRow(
             IconButton(onClick = onPreview) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                    contentDescription = "تجربة الصوت",
+                    contentDescription = "تجربة صوت الشيخ",
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
@@ -737,7 +890,7 @@ private fun AdhkarPeriodicStatusText(
         } else if (settings.isPeriodicDhikrEnabled) {
             "يعمل كل ${PrayerTimeCalculator.toArabicDigits(settings.periodicDhikrIntervalMinutes)} دقائق • ${settings.periodicDhikrMode.arabicLabel}"
         } else {
-            "يذكّرك بالصلاة على النبي ﷺ والأذكار تلقائيًا بدون نت"
+            "يذكّرك بالصلاة على النبي ﷺ والأذكار بصوت حقيقي بدون نت"
         },
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)

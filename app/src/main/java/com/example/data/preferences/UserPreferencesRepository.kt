@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.catalog.QuranCatalog
 import com.example.domain.model.AdhanVoice
+import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.CalculationMethod
 import com.example.domain.model.MushafPaperTheme
 import com.example.domain.model.PeriodicDhikrMode
@@ -50,8 +51,8 @@ data class UserSettings(
     val tasbihSoundEnabled: Boolean = true,
     val tasbihVibrationEnabled: Boolean = true,
     val selectedTasbihId: Int = 1,
-    val adhkarVoiceId: String = "calm_deep",
-    val adhkarQuranReciterId: String = "yasser",
+    val adhkarVoiceId: String = AdhkarSheikhVoice.ALAFASY.id,
+    val adhkarQuranReciterId: String = "afs",
     val adhkarChimeBeforeVoice: Boolean = false
 ) {
     fun enabledPrayersMap(): Map<PrayerName, Boolean> = mapOf(
@@ -92,7 +93,7 @@ class UserPreferencesRepository(private val context: Context) {
         val TASBIH_SOUND = booleanPreferencesKey("tasbih_sound")
         val TASBIH_VIBRATION = booleanPreferencesKey("tasbih_vibration")
         val SELECTED_TASBIH_ID = intPreferencesKey("selected_tasbih_id")
-        val ADHKAR_VOICE_ID = stringPreferencesKey("adhkar_voice_id")
+        val ADHKAR_VOICE_ID = stringPreferencesKey("adhkar_sheikh_id")
         val ADHKAR_QURAN_RECITER_ID = stringPreferencesKey("adhkar_quran_reciter_id")
         val ADHKAR_CHIME_BEFORE_VOICE = booleanPreferencesKey("adhkar_chime_before_voice")
     }
@@ -125,8 +126,8 @@ class UserPreferencesRepository(private val context: Context) {
             tasbihSoundEnabled = prefs[Keys.TASBIH_SOUND] ?: true,
             tasbihVibrationEnabled = prefs[Keys.TASBIH_VIBRATION] ?: true,
             selectedTasbihId = prefs[Keys.SELECTED_TASBIH_ID] ?: 1,
-            adhkarVoiceId = prefs[Keys.ADHKAR_VOICE_ID] ?: "calm_deep",
-            adhkarQuranReciterId = prefs[Keys.ADHKAR_QURAN_RECITER_ID] ?: "yasser",
+            adhkarVoiceId = prefs[Keys.ADHKAR_VOICE_ID] ?: AdhkarSheikhVoice.ALAFASY.id,
+            adhkarQuranReciterId = prefs[Keys.ADHKAR_QURAN_RECITER_ID] ?: "afs",
             adhkarChimeBeforeVoice = prefs[Keys.ADHKAR_CHIME_BEFORE_VOICE] ?: false
         )
     }

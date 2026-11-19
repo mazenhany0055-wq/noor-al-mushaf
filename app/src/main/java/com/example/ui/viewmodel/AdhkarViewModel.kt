@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.NoorAlMushafApp
 import com.example.data.catalog.AdhkarCatalog
 import com.example.domain.model.AdhkarCategory
+import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.DhikrItem
 import com.example.domain.model.OfflineTtsVoiceInfo
 import com.example.service.DhikrSpeaker
@@ -21,7 +22,8 @@ data class AdhkarUiState(
     val selectedCategory: AdhkarCategory = AdhkarCategory.MORNING,
     val remainingCounts: Map<String, Int> = emptyMap(),
     val speakingDhikrId: String? = null,
-    val isAutoPlayingCategory: Boolean = false
+    val isAutoPlayingCategory: Boolean = false,
+    val activeSessionLabel: String? = null
 ) {
     val categoryItems: List<DhikrItem>
         get() = AdhkarCatalog.allDhikr.filter { it.category == selectedCategory }
@@ -138,19 +140,39 @@ class AdhkarViewModel(application: Application) : AndroidViewModel(application) 
 
     fun previewVoice(voiceId: String, chimeBefore: Boolean) {
         stopSpeaking()
-        speaker.speakDhikr(
-            phrase = "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ، سُبْحَانَ اللَّهِ الْعَظِيمِ",
-            voiceId = voiceId,
-            chimeBefore = chimeBefore,
-            useMediaUsage = true
+        speaker.previewSheikhVoice(
+            sheikh = AdhkarSheikhVoice.fromId(voiceId),
+            chimeBefore = chimeBefore
         )
+    }
+
+    fun playSheikhSession(sheikh: AdhkarSheikhVoice, isMorning: Boolean): Boolean {
+        val label = "${sheikh.arabicName} • ${if (isMorning) "أذكار الصباح كاملة" else "أذكار المساء كاملة"}"
+        if (_uiState.value.activeSessionLabel == label) {
+            stopSpeaking()
+            return true
+        }
+        stopSpeaking()
+        val started = speaker.playSheikhSession(sheikh, isMorning) {
+            _uiState.update { it.copy(activeSessionLabel = null) }
+        }
+        if (started) {
+            _uiState.update { it.copy(activeSessionLabel = label) }
+        }
+        return started
     }
 
     fun stopSpeaking() {
         autoPlayJob?.cancel()
         autoPlayJob = null
         speaker.stop()
-        _uiState.update { it.copy(speakingDhikrId = null, isAutoPlayingCategory = false) }
+        _uiState.update {
+            it.copy(
+                speakingDhikrId = null,
+                isAutoPlayingCategory = false,
+                activeSessionLabel = null
+            )
+        }
     }
 
     override fun onCleared() {

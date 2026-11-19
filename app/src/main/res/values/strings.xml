@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">نور المصحف</string>
+    <string name="app_name">نور القرأن</string>
     <string name="channel_adhan_name">أذان الصلاة</string>
     <string name="channel_adhan_desc">تنبيهات وأذان أوقات الصلوات الخمس</string>
     <string name="channel_adhan_fallback_name">تنبيه الأذان الاحتياطي</string>

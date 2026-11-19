@@ -16,7 +16,7 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("نور المصحف", appName)
+    assertEquals("نور القرأن", appName)
   }
 
   @Test
@@ -43,7 +43,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `verify adhkar periodic modes and voice presets`() {
+  fun `verify adhkar periodic modes and real sheikh voices`() {
     org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_AND_NOTIFICATION.includesVoice)
     org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_AND_NOTIFICATION.includesNotification)
     org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_ONLY.includesVoice)
@@ -51,8 +51,33 @@ class ExampleRobolectricTest {
     org.junit.Assert.assertFalse(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesVoice)
     org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesNotification)
 
-    org.junit.Assert.assertNotNull(com.example.domain.model.AdhkarVoicePreset.fromId("calm_deep"))
-    org.junit.Assert.assertNotNull(com.example.domain.model.AdhkarVoicePreset.fromId("slow_teaching"))
+    val defaultSettings = com.example.data.preferences.UserSettings()
+    assertEquals("sheikh_alafasy", defaultSettings.adhkarVoiceId)
+    assertEquals("afs", defaultSettings.adhkarQuranReciterId)
+
+    org.junit.Assert.assertEquals(
+      com.example.domain.model.AdhkarSheikhVoice.ALAFASY,
+      com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_alafasy")
+    )
+    org.junit.Assert.assertEquals(
+      com.example.domain.model.AdhkarSheikhVoice.NASSER_ALQATAMI,
+      com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_qatami")
+    )
+    org.junit.Assert.assertEquals(
+      com.example.domain.model.AdhkarSheikhVoice.ALAFASY,
+      com.example.domain.model.AdhkarSheikhVoice.fromId("unknown_id")
+    )
+
+    val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+    val offlineRepo = com.example.data.repository.OfflineAudioRepository(app)
+    org.junit.Assert.assertNull(offlineRepo.getOfflineDhikrClipUri("m2"))
+    org.junit.Assert.assertNull(offlineRepo.getOfflinePeriodicDhikrUri(0))
+
+    val factory = androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(app)
+    val adhkarVm = factory.create(com.example.ui.viewmodel.AdhkarViewModel::class.java)
+    adhkarVm.previewVoice("sheikh_alafasy", false)
+    adhkarVm.playSheikhSession(com.example.domain.model.AdhkarSheikhVoice.ALAFASY, true)
+    adhkarVm.stopSpeaking()
   }
 
   @Test

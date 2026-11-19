@@ -125,6 +125,7 @@ private fun NoorAlMushafAppShell(
     val offlineSurahsByReciter by mainViewModel.offlineSurahsByReciter.collectAsStateWithLifecycle()
     val downloadProgress by mainViewModel.downloadProgress.collectAsStateWithLifecycle()
     val offlineAdhanIds by mainViewModel.offlineAdhanIds.collectAsStateWithLifecycle()
+    val offlineAdhkarSessionKeys by mainViewModel.offlineAdhkarSessionKeys.collectAsStateWithLifecycle()
     val totalOfflineAudioBytes by mainViewModel.totalOfflineAudioBytes.collectAsStateWithLifecycle()
     val pagesCache by quranViewModel.pagesCache.collectAsStateWithLifecycle()
     val bookmarks by quranViewModel.bookmarks.collectAsStateWithLifecycle()
@@ -132,7 +133,6 @@ private fun NoorAlMushafAppShell(
     val tasbihItems by tasbihViewModel.items.collectAsStateWithLifecycle()
     val totalLifetimeTasbih by tasbihViewModel.totalLifetimeCount.collectAsStateWithLifecycle()
     val adhkarState by adhkarViewModel.uiState.collectAsStateWithLifecycle()
-    val availableSystemVoices by adhkarViewModel.availableSystemVoices.collectAsStateWithLifecycle()
 
     val isFullScreenReader = currentRoute?.startsWith("mushaf_reader") == true
 
@@ -315,7 +315,8 @@ private fun NoorAlMushafAppShell(
                             adhkarState = adhkarState,
                             settings = settings,
                             countdownFlow = mainViewModel.countdownState,
-                            availableSystemVoices = availableSystemVoices,
+                            offlineAdhkarSessionKeys = offlineAdhkarSessionKeys,
+                            downloadProgress = downloadProgress,
                             onSelectCategory = { adhkarViewModel.selectCategory(it) },
                             onDecrementDhikr = { adhkarViewModel.decrementDhikr(it) },
                             onResetCategory = { adhkarViewModel.resetCategory() },
@@ -328,6 +329,12 @@ private fun NoorAlMushafAppShell(
                             onToggleChimeBeforeVoice = { mainViewModel.updateAdhkarChimeBeforeVoice(it) },
                             onPreviewAdhkarVoice = { voiceId ->
                                 adhkarViewModel.previewVoice(voiceId, settings.adhkarChimeBeforeVoice)
+                            },
+                            onPlaySheikhSession = { sheikh, isMorning ->
+                                adhkarViewModel.playSheikhSession(sheikh, isMorning)
+                            },
+                            onDownloadSheikhSession = { sheikh, isMorning ->
+                                mainViewModel.downloadAdhkarSession(sheikh, isMorning)
                             },
                             onSpeakSingleDhikr = { item ->
                                 adhkarViewModel.speakSingleDhikr(

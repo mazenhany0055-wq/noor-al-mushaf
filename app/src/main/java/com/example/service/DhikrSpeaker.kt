@@ -8,14 +8,21 @@ import android.net.Uri
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import com.example.data.catalog.AdhkarCatalog
 import com.example.data.repository.OfflineAudioRepository
+import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.AdhkarVoicePreset
 import com.example.domain.model.DhikrItem
 import com.example.domain.model.OfflineTtsVoiceInfo
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
@@ -27,6 +34,8 @@ class DhikrSpeaker(
 ) {
 
     private val appContext = context.applicationContext
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var fetchJob: Job? = null
     private var tts: TextToSpeech? = null
     private var isTtsReady: Boolean = false
     private var mediaPlayer: MediaPlayer? = null
@@ -53,7 +62,60 @@ class DhikrSpeaker(
     ) {
         stop()
 
-        val offlineUri = resolveOfflineQuranUriForDhikr(item, quranReciterId)
+        val sheikh = AdhkarSheikhVoice.fromId(voiceId)
+        val effectiveReciterId = if (voiceId.startsWith("sheikh_")) sheikh.quranReciterId else quranReciterId
+
+        // 1. Try instant local/bundled real-sheikh recording
+        val immediateUri = resolveLocalDhikrUri(item, effectiveReciterId)
+        if (immediateUri != null) {
+            if (chimeBefore) playChime()
+            if (playOfflineUri(immediateUri, useMediaUsage, onFinished)) {
+                return
+            }
+        }
+
+        // 2. If online, fetch real Sheikh MP3 recording cleanly (never robotic TTS!)
+        if (offlineAudioRepository.isNetworkConnected()) {
+            _isSpeaking.value = true
+            fetchJob = scope.launch {
+                val remoteCachedUri = fetchRemoteDhikrUri(item, effectiveReciterId)
+                if (remoteCachedUri != null) {
+                    if (chimeBefore) playChime()
+                    if (playOfflineUri(remoteCachedUri, useMediaUsage, onFinished)) {
+                        return@launch
+                    }
+                }
+                speakDhikr(
+                    phrase = item.text,
+                    voiceId = voiceId,
+                    chimeBefore = chimeBefore,
+                    useMediaUsage = useMediaUsage,
+                    onFinished = onFinished
+                )
+            }
+            return
+        }
+
+        // 3. Offline emergency fallback only if clip was not bundled/cached
+        speakDhikr(
+            phrase = item.text,
+            voiceId = voiceId,
+            chimeBefore = chimeBefore,
+            useMediaUsage = useMediaUsage,
+            onFinished = onFinished
+        )
+    }
+
+    fun playPeriodicDhikr(
+        phraseIndex: Int,
+        phraseText: String,
+        voiceId: String,
+        chimeBefore: Boolean,
+        useMediaUsage: Boolean = true,
+        onFinished: (() -> Unit)? = null
+    ) {
+        stop()
+        val offlineUri = offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)
         if (offlineUri != null) {
             if (chimeBefore) playChime()
             if (playOfflineUri(offlineUri, useMediaUsage, onFinished)) {
@@ -61,11 +123,142 @@ class DhikrSpeaker(
             }
         }
 
+        if (offlineAudioRepository.isNetworkConnected()) {
+            _isSpeaking.value = true
+            fetchJob = scope.launch {
+                val cached = offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
+                if (cached != null) {
+                    if (chimeBefore) playChime()
+                    if (playOfflineUri(cached, useMediaUsage, onFinished)) {
+                        return@launch
+                    }
+                }
+                speakDhikr(
+                    phrase = phraseText,
+                    voiceId = voiceId,
+                    chimeBefore = chimeBefore,
+                    useMediaUsage = useMediaUsage,
+                    onFinished = onFinished
+                )
+            }
+            return
+        }
+
         speakDhikr(
-            phrase = item.text,
+            phrase = phraseText,
             voiceId = voiceId,
             chimeBefore = chimeBefore,
             useMediaUsage = useMediaUsage,
+            onFinished = onFinished
+        )
+    }
+
+    suspend fun playPeriodicDhikrAndAwait(
+        phraseIndex: Int,
+        phraseText: String,
+        voiceId: String,
+        chimeBefore: Boolean,
+        timeoutMs: Long = 22_000L
+    ) {
+        val localUri = offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)
+            ?: if (offlineAudioRepository.isNetworkConnected()) {
+                offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
+            } else {
+                null
+            }
+
+        if (localUri != null) {
+            if (chimeBefore) playChime()
+            val playedRealSheikh = withTimeoutOrNull(timeoutMs) {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    val started = playOfflineUri(localUri, useMediaUsage = false) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+                    if (!started && cont.isActive) {
+                        cont.resume(false)
+                    }
+                    cont.invokeOnCancellation { stop() }
+                }
+            }
+            if (playedRealSheikh == true) return
+        }
+
+        speakAndAwait(
+            phrase = phraseText,
+            voiceId = voiceId,
+            chimeBefore = chimeBefore,
+            timeoutMs = 9_000L
+        )
+    }
+
+    fun playSheikhSession(
+        sheikh: AdhkarSheikhVoice,
+        isMorning: Boolean,
+        onFinished: (() -> Unit)? = null
+    ): Boolean {
+        stop()
+        val offlineUri = offlineAudioRepository.getOfflineAdhkarSessionUri(sheikh, isMorning)
+        if (offlineUri != null) {
+            return playOfflineUri(offlineUri, useMediaUsage = true, onFinished = onFinished)
+        }
+        val streamUrl = if (isMorning) sheikh.morningSessionUrl else sheikh.eveningSessionUrl
+        if (streamUrl != null && offlineAudioRepository.isNetworkConnected()) {
+            return playOfflineUri(Uri.parse(streamUrl), useMediaUsage = true, onFinished = onFinished)
+        }
+        return false
+    }
+
+    fun previewSheikhVoice(
+        sheikh: AdhkarSheikhVoice,
+        chimeBefore: Boolean = false,
+        onFinished: (() -> Unit)? = null
+    ) {
+        stop()
+        // Try playing Sheikh's genuine recording (Ayat Al-Kursi / Fatiha / Hisn Dhikr / Session)
+        val reciterAyah = offlineAudioRepository.getOfflineAyahUri(sheikh.quranReciterId, 2, 255)
+            ?: offlineAudioRepository.getOfflineDhikrClipUri("m2")
+            ?: offlineAudioRepository.getOfflinePeriodicDhikrUri(0)
+            ?: offlineAudioRepository.getOfflineSurahUri(sheikh.quranReciterId, 1)
+            ?: offlineAudioRepository.getOfflineAdhkarSessionUri(sheikh, true)
+
+        if (sheikh == AdhkarSheikhVoice.HAMAD_AL_DURAYHIM) {
+            val hisnUri = offlineAudioRepository.getOfflineDhikrClipUri("m2")
+                ?: offlineAudioRepository.getOfflinePeriodicDhikrUri(0)
+            if (hisnUri != null) {
+                if (chimeBefore) playChime()
+                if (playOfflineUri(hisnUri, useMediaUsage = true, onFinished = onFinished)) return
+            }
+        }
+
+        if (reciterAyah != null) {
+            if (chimeBefore) playChime()
+            if (playOfflineUri(reciterAyah, useMediaUsage = true, onFinished = onFinished)) return
+        }
+
+        if (offlineAudioRepository.isNetworkConnected()) {
+            _isSpeaking.value = true
+            fetchJob = scope.launch {
+                val downloaded = if (sheikh == AdhkarSheikhVoice.HAMAD_AL_DURAYHIM) {
+                    offlineAudioRepository.fetchAndCacheHisnDhikrClip("m2", AdhkarCatalog.allDhikr.firstOrNull { it.id == "m2" }?.text ?: "")
+                } else {
+                    offlineAudioRepository.downloadAyahClip(sheikh.quranReciterId, 2, 255)
+                        ?: offlineAudioRepository.fetchAndCachePeriodicClip(0, AdhkarCatalog.periodicDhikrPhrases.first())
+                }
+                if (downloaded != null) {
+                    if (chimeBefore) playChime()
+                    if (playOfflineUri(downloaded, useMediaUsage = true, onFinished = onFinished)) return@launch
+                }
+                _isSpeaking.value = false
+                onFinished?.invoke()
+            }
+            return
+        }
+
+        speakDhikr(
+            phrase = "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ، سُبْحَانَ اللَّهِ الْعَظِيمِ",
+            voiceId = sheikh.id,
+            chimeBefore = chimeBefore,
+            useMediaUsage = true,
             onFinished = onFinished
         )
     }
@@ -165,6 +358,8 @@ class DhikrSpeaker(
     }
 
     fun stop() {
+        fetchJob?.cancel()
+        fetchJob = null
         try {
             tts?.stop()
         } catch (_: Exception) {
@@ -184,6 +379,33 @@ class DhikrSpeaker(
             tts = null
             isTtsReady = false
         }
+    }
+
+    private fun resolveLocalDhikrUri(item: DhikrItem, reciterId: String): Uri? {
+        val surah = item.surahNumber
+        if (surah != null) {
+            if (item.id == "m_muawwidhat") {
+                offlineAudioRepository.getOfflineSurahUri(reciterId, 112)?.let { return it }
+                offlineAudioRepository.getOfflineSurahUri("afs", 112)?.let { return it }
+                offlineAudioRepository.getOfflineSurahUri("yasser", 112)?.let { return it }
+            } else if (item.ayahNumbers.isNotEmpty()) {
+                val ayah = item.ayahNumbers.first()
+                offlineAudioRepository.getOfflineAyahUri(reciterId, surah, ayah)?.let { return it }
+                offlineAudioRepository.getOfflineAyahUri("afs", surah, ayah)?.let { return it }
+                offlineAudioRepository.getOfflineAyahUri("yasser", surah, ayah)?.let { return it }
+            }
+        }
+        return offlineAudioRepository.getOfflineDhikrClipUri(item.id)
+    }
+
+    private suspend fun fetchRemoteDhikrUri(item: DhikrItem, reciterId: String): Uri? {
+        val surah = item.surahNumber
+        if (surah != null && item.ayahNumbers.isNotEmpty()) {
+            offlineAudioRepository.downloadAyahClip(reciterId, surah, item.ayahNumbers.first())?.let {
+                return it
+            }
+        }
+        return offlineAudioRepository.fetchAndCacheHisnDhikrClip(item.id, item.text)
     }
 
     private fun notifyDone() {
@@ -289,23 +511,13 @@ class DhikrSpeaker(
         engine.setSpeechRate(preset.speechRate)
     }
 
-    private fun resolveOfflineQuranUriForDhikr(item: DhikrItem, reciterId: String): Uri? {
-        val surah = item.surahNumber ?: return null
-        if (item.ayahNumbers.size == 1) {
-            return offlineAudioRepository.getOfflineAyahUri(reciterId, surah, item.ayahNumbers.first())
-        }
-        if (item.id == "m_muawwidhat") {
-            return offlineAudioRepository.getOfflineSurahUri(reciterId, 112)
-        }
-        return null
-    }
-
     private fun playOfflineUri(
         uri: Uri,
         useMediaUsage: Boolean,
         onFinished: (() -> Unit)?
     ): Boolean {
         return try {
+            releaseMediaPlayer()
             val mp = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()

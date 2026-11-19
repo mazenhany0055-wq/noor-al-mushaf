@@ -10,6 +10,7 @@ import com.example.data.catalog.AdhkarCatalog
 import com.example.data.catalog.QuranCatalog
 import com.example.data.preferences.UserSettings
 import com.example.domain.model.AdhanVoice
+import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.CalculationMethod
 import com.example.domain.model.CityPreset
 import com.example.domain.model.DailyPrayerSchedule
@@ -80,6 +81,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val offlineSurahsByReciter: StateFlow<Map<String, Set<Int>>> = offlineAudioRepo.offlineSurahsByReciter
     val downloadProgress: StateFlow<Map<String, Float>> = offlineAudioRepo.downloadProgress
     val offlineAdhanIds: StateFlow<Set<String>> = offlineAudioRepo.offlineAdhanIds
+    val offlineAdhkarSessionKeys: StateFlow<Set<String>> = offlineAudioRepo.offlineAdhkarSessionKeys
     val totalOfflineAudioBytes: StateFlow<Long> = offlineAudioRepo.totalStorageBytes
     val availableSystemVoices: StateFlow<List<OfflineTtsVoiceInfo>> = dhikrSpeaker.availableSystemVoices
 
@@ -382,7 +384,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateAdhkarVoice(voiceId: String) {
         viewModelScope.launch {
-            prefsRepo.updateAdhkarVoicePreferences(voiceId = voiceId)
+            val sheikh = AdhkarSheikhVoice.fromId(voiceId)
+            prefsRepo.updateAdhkarVoicePreferences(
+                voiceId = sheikh.id,
+                quranReciterId = sheikh.quranReciterId
+            )
+            showBanner("تم اختيار ${sheikh.arabicName} للأذكار")
         }
     }
 
@@ -395,6 +402,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateAdhkarChimeBeforeVoice(enabled: Boolean) {
         viewModelScope.launch {
             prefsRepo.updateAdhkarVoicePreferences(chimeBeforeVoice = enabled)
+        }
+    }
+
+    fun downloadAdhkarSession(sheikh: AdhkarSheikhVoice, isMorning: Boolean) {
+        viewModelScope.launch {
+            val res = offlineAudioRepo.downloadSheikhAdhkarSession(sheikh, isMorning)
+            val label = if (isMorning) "أذكار الصباح" else "أذكار المساء"
+            if (res.isSuccess) {
+                showBanner("تم حفظ $label بصوت ${sheikh.arabicName} للعمل بدون نت ✓")
+            } else {
+                showBanner("تعذر التحميل — تأكد من الاتصال بالإنترنت لحفظ $label")
+            }
         }
     }
 
@@ -415,8 +434,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             if (current.periodicDhikrMode.includesVoice) {
-                dhikrSpeaker.speakDhikr(
-                    phrase = phrase,
+                dhikrSpeaker.playPeriodicDhikr(
+                    phraseIndex = idx,
+                    phraseText = phrase,
                     voiceId = current.adhkarVoiceId,
                     chimeBefore = current.adhkarChimeBeforeVoice,
                     useMediaUsage = true

@@ -31,7 +31,7 @@ class DhikrReminderReceiver : BroadcastReceiver() {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
         val wakeLock = try {
             powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NoorAlMushaf:DhikrWake")?.apply {
-                acquire(10_500L)
+                acquire(24_000L)
             }
         } catch (_: Exception) {
             null
@@ -64,11 +64,12 @@ class DhikrReminderReceiver : BroadcastReceiver() {
 
                 if (settings.periodicDhikrMode.includesVoice) {
                     speaker = DhikrSpeaker(context, app.offlineAudioRepository)
-                    speaker.speakAndAwait(
-                        phrase = phrase,
+                    speaker.playPeriodicDhikrAndAwait(
+                        phraseIndex = currentIndex,
+                        phraseText = phrase,
                         voiceId = settings.adhkarVoiceId,
                         chimeBefore = settings.adhkarChimeBeforeVoice,
-                        timeoutMs = 9_000L
+                        timeoutMs = 22_000L
                     )
                 } else if (settings.periodicDhikrMode == PeriodicDhikrMode.CHIME_AND_NOTIFICATION) {
                     try {

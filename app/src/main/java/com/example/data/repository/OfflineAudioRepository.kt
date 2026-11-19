@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import com.example.data.catalog.QuranCatalog
 import com.example.domain.model.AdhanVoice
+import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.ReciterInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
@@ -26,6 +28,9 @@ class OfflineAudioRepository(context: Context) {
     private val quranRootDir = File(appContext.filesDir, "offline_quran").apply { mkdirs() }
     private val ayahRootDir = File(appContext.filesDir, "offline_ayahs").apply { mkdirs() }
     private val adhanRootDir = File(appContext.filesDir, "offline_adhan").apply { mkdirs() }
+    private val adhkarClipsDir = File(appContext.filesDir, "offline_adhkar_clips").apply { mkdirs() }
+    private val adhkarSessionsDir = File(appContext.filesDir, "offline_adhkar_sessions").apply { mkdirs() }
+    private val hisnIndexCacheFile = File(adhkarClipsDir, "adhkar_hisn_index.json")
 
     private val downloadClient = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -35,6 +40,7 @@ class OfflineAudioRepository(context: Context) {
 
     private val bundledSurahsByReciter: Map<String, Set<Int>> by lazy { scanBundledSurahs() }
     private val bundledAdhanIds: Set<String> by lazy { scanBundledAdhans() }
+    private val bundledAdhkarSessionKeys: Set<String> by lazy { scanBundledAdhkarSessions() }
 
     private val _offlineSurahsByReciter = MutableStateFlow<Map<String, Set<Int>>>(emptyMap())
     val offlineSurahsByReciter: StateFlow<Map<String, Set<Int>>> = _offlineSurahsByReciter.asStateFlow()
@@ -44,6 +50,9 @@ class OfflineAudioRepository(context: Context) {
 
     private val _offlineAdhanIds = MutableStateFlow<Set<String>>(emptySet())
     val offlineAdhanIds: StateFlow<Set<String>> = _offlineAdhanIds.asStateFlow()
+
+    private val _offlineAdhkarSessionKeys = MutableStateFlow<Set<String>>(emptySet())
+    val offlineAdhkarSessionKeys: StateFlow<Set<String>> = _offlineAdhkarSessionKeys.asStateFlow()
 
     private val _totalStorageBytes = MutableStateFlow(0L)
     val totalStorageBytes: StateFlow<Long> = _totalStorageBytes.asStateFlow()
@@ -79,7 +88,20 @@ class OfflineAudioRepository(context: Context) {
             }
         }
         _offlineAdhanIds.value = adhans
-        _totalStorageBytes.value = computeDirSize(quranRootDir) + computeDirSize(ayahRootDir) + computeDirSize(adhanRootDir)
+
+        val sessions = bundledAdhkarSessionKeys.toMutableSet()
+        adhkarSessionsDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".mp3") && file.length() > 4096L) {
+                sessions.add(file.nameWithoutExtension)
+            }
+        }
+        _offlineAdhkarSessionKeys.value = sessions
+
+        _totalStorageBytes.value = computeDirSize(quranRootDir) +
+            computeDirSize(ayahRootDir) +
+            computeDirSize(adhanRootDir) +
+            computeDirSize(adhkarClipsDir) +
+            computeDirSize(adhkarSessionsDir)
     }
 
     fun getOfflineSurahUri(reciterId: String, surahNumber: Int): Uri? {
@@ -158,6 +180,197 @@ class OfflineAudioRepository(context: Context) {
 
         _downloadProgress.update { it - key }
         Result.failure(lastError ?: IllegalStateException("تعذّر تحميل السورة"))
+    }
+
+    fun getOfflineDhikrClipUri(dhikrId: String): Uri? {
+        val localFile = File(adhkarClipsDir, "dhikr_$dhikrId.mp3")
+        if (localFile.exists() && localFile.length() > 512L) {
+            return Uri.fromFile(localFile)
+        }
+        val assetPath = "audio/adhkar/hisn/dhikr_$dhikrId.mp3"
+        if (assetExists(assetPath)) {
+            return Uri.parse("asset:///$assetPath")
+        }
+        return null
+    }
+
+    fun getOfflinePeriodicDhikrUri(phraseIndex: Int): Uri? {
+        val localFile = File(adhkarClipsDir, "periodic_$phraseIndex.mp3")
+        if (localFile.exists() && localFile.length() > 512L) {
+            return Uri.fromFile(localFile)
+        }
+        val assetPath = "audio/adhkar/hisn/periodic_$phraseIndex.mp3"
+        if (assetExists(assetPath)) {
+            return Uri.parse("asset:///$assetPath")
+        }
+        return null
+    }
+
+    fun getOfflineAdhkarSessionUri(sheikh: AdhkarSheikhVoice, isMorning: Boolean): Uri? {
+        val suffix = if (isMorning) "morning" else "evening"
+        val localFile = File(adhkarSessionsDir, "${sheikh.id}_$suffix.mp3")
+        if (localFile.exists() && localFile.length() > 4096L) {
+            return Uri.fromFile(localFile)
+        }
+        val assetPath = if (isMorning) sheikh.bundledMorningAsset else sheikh.bundledEveningAsset
+        if (assetPath != null && assetExists(assetPath)) {
+            return Uri.parse("asset:///$assetPath")
+        }
+        return null
+    }
+
+    suspend fun downloadAyahClip(reciterId: String, surahNumber: Int, ayahNumber: Int): Uri? =
+        withContext(Dispatchers.IO) {
+            getOfflineAyahUri(reciterId, surahNumber, ayahNumber)?.let { return@withContext it }
+            val reciter = QuranCatalog.reciters.find { it.id == reciterId }
+                ?: QuranCatalog.reciters.find { it.id == "afs" }
+                ?: return@withContext null
+            val url = reciter.everyAyahUrl(surahNumber, ayahNumber) ?: return@withContext null
+            val s = surahNumber.toString().padStart(3, '0')
+            val a = ayahNumber.toString().padStart(3, '0')
+            val reciterDir = File(ayahRootDir, reciter.id).apply { mkdirs() }
+            val target = File(reciterDir, "$s$a.mp3")
+            val res = downloadUrlToFile(url, target) {}
+            if (res.isSuccess) {
+                refreshIndex()
+                Uri.fromFile(target)
+            } else {
+                null
+            }
+        }
+
+    suspend fun fetchAndCacheHisnDhikrClip(dhikrId: String, arabicText: String): Uri? =
+        withContext(Dispatchers.IO) {
+            getOfflineDhikrClipUri(dhikrId)?.let { return@withContext it }
+            if (!isNetworkConnected()) return@withContext null
+            val audioPath = findMatchingHisnAudioPath(arabicText) ?: return@withContext null
+            val target = File(adhkarClipsDir, "dhikr_$dhikrId.mp3")
+            downloadHisnAudioPath(audioPath, target)
+        }
+
+    suspend fun fetchAndCachePeriodicClip(phraseIndex: Int, phraseText: String): Uri? =
+        withContext(Dispatchers.IO) {
+            getOfflinePeriodicDhikrUri(phraseIndex)?.let { return@withContext it }
+            if (!isNetworkConnected()) return@withContext null
+            val audioPath = findMatchingHisnAudioPath(phraseText) ?: return@withContext null
+            val target = File(adhkarClipsDir, "periodic_$phraseIndex.mp3")
+            downloadHisnAudioPath(audioPath, target)
+        }
+
+    suspend fun downloadSheikhAdhkarSession(sheikh: AdhkarSheikhVoice, isMorning: Boolean): Result<File> =
+        withContext(Dispatchers.IO) {
+            val suffix = if (isMorning) "morning" else "evening"
+            val target = File(adhkarSessionsDir, "${sheikh.id}_$suffix.mp3")
+            if (target.exists() && target.length() > 4096L) {
+                return@withContext Result.success(target)
+            }
+            val url = (if (isMorning) sheikh.morningSessionUrl else sheikh.eveningSessionUrl)
+                ?: return@withContext Result.failure(IllegalStateException("لا يوجد تسجيل جلسة لهذا الشيخ"))
+            val key = "session:${sheikh.id}_$suffix"
+            _downloadProgress.update { it + (key to 0.02f) }
+            val res = downloadUrlToFile(url, target) { progress ->
+                _downloadProgress.update { it + (key to progress.coerceIn(0.02f, 0.99f)) }
+            }
+            _downloadProgress.update { it - key }
+            if (res.isSuccess) {
+                refreshIndex()
+            }
+            res
+        }
+
+    private fun downloadHisnAudioPath(audioPath: String, target: File): Uri? {
+        val cleanPath = if (audioPath.startsWith("/")) audioPath else "/$audioPath"
+        val urls = if (audioPath.startsWith("http")) {
+            listOf(audioPath)
+        } else {
+            listOf(
+                "https://raw.githubusercontent.com/rn0x/Adhkar-json/main$cleanPath",
+                "https://www.hisnmuslim.com$cleanPath"
+            )
+        }
+        for (url in urls) {
+            val res = downloadUrlToFile(url, target) {}
+            if (res.isSuccess) {
+                refreshIndex()
+                return Uri.fromFile(target)
+            }
+        }
+        return null
+    }
+
+    private fun findMatchingHisnAudioPath(arabicText: String): String? {
+        val jsonContent = ensureHisnIndexJson() ?: return null
+        return try {
+            val normTarget = normalizeArabic(arabicText)
+            val probe = normTarget.take(26)
+            val rootArray = JSONArray(jsonContent)
+            var bestAudio: String? = null
+            var bestScore = 0
+            for (i in 0 until rootArray.length()) {
+                val categoryObj = rootArray.optJSONObject(i) ?: continue
+                val items = categoryObj.optJSONArray("array") ?: continue
+                for (j in 0 until items.length()) {
+                    val itemObj = items.optJSONObject(j) ?: continue
+                    val rawText = itemObj.optString("text", "")
+                    val audio = itemObj.optString("audio", "").ifBlank { itemObj.optString("filename", "") }
+                    if (rawText.isBlank() || audio.isBlank()) continue
+                    val normCandidate = normalizeArabic(rawText)
+                    if (normCandidate.contains(normTarget) || normTarget.contains(normCandidate)) {
+                        return audio
+                    }
+                    if (probe.length >= 10 && normCandidate.contains(probe)) {
+                        return audio
+                    }
+                    val words = normTarget.split(" ").filter { it.length >= 3 }.take(6)
+                    val hits = words.count { normCandidate.contains(it) }
+                    if (hits > bestScore && hits >= 3) {
+                        bestScore = hits
+                        bestAudio = audio
+                    }
+                }
+            }
+            bestAudio
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun ensureHisnIndexJson(): String? {
+        if (hisnIndexCacheFile.exists() && hisnIndexCacheFile.length() > 5000L) {
+            return try { hisnIndexCacheFile.readText(Charsets.UTF_8) } catch (_: Exception) { null }
+        }
+        return try {
+            val request = Request.Builder()
+                .url("https://raw.githubusercontent.com/rn0x/Adhkar-json/main/adhkar.json")
+                .header("User-Agent", "NoorAlQuran-Android/1.2")
+                .build()
+            downloadClient.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val bodyStr = resp.body?.string() ?: return null
+                if (bodyStr.length > 5000) {
+                    hisnIndexCacheFile.writeText(bodyStr, Charsets.UTF_8)
+                    bodyStr
+                } else {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun normalizeArabic(input: String): String {
+        return input
+            .replace(Regex("[\\u064B-\\u065F\\u0670\\u06D6-\\u06ED\\u0640]"), "")
+            .replace("أ", "ا")
+            .replace("إ", "ا")
+            .replace("آ", "ا")
+            .replace("ٱ", "ا")
+            .replace("ى", "ي")
+            .replace("ة", "ه")
+            .replace(Regex("[^\\u0621-\\u064A\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 
     suspend fun downloadAdhanVoice(voice: AdhanVoice): Result<File> = withContext(Dispatchers.IO) {
@@ -271,6 +484,19 @@ class OfflineAudioRepository(context: Context) {
             val path = voice.bundledAssetPath
             if (path != null && assetExists(path)) voice.id else null
         }.toSet()
+    }
+
+    private fun scanBundledAdhkarSessions(): Set<String> {
+        val result = mutableSetOf<String>()
+        AdhkarSheikhVoice.entries.forEach { sheikh ->
+            sheikh.bundledMorningAsset?.let { path ->
+                if (assetExists(path)) result.add("${sheikh.id}_morning")
+            }
+            sheikh.bundledEveningAsset?.let { path ->
+                if (assetExists(path)) result.add("${sheikh.id}_evening")
+            }
+        }
+        return result
     }
 
     private fun assetExists(assetPath: String): Boolean {

@@ -225,6 +225,66 @@ enum class PeriodicDhikrMode(
     }
 }
 
+enum class AdhkarSheikhVoice(
+    val id: String,
+    val arabicName: String,
+    val description: String,
+    val quranReciterId: String,
+    val morningSessionUrl: String? = null,
+    val eveningSessionUrl: String? = null,
+    val bundledMorningAsset: String? = null,
+    val bundledEveningAsset: String? = null
+) {
+    ALAFASY(
+        id = "sheikh_alafasy",
+        arabicName = "الشيخ مشاري راشد العفاسي",
+        description = "أذكار الصباح والمساء كاملة + الآيات بصوت حقيقي",
+        quranReciterId = "afs",
+        morningSessionUrl = "https://archive.org/download/adkar_sabah_masae_safar/2%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B5%D8%A8%D8%A7%D8%AD%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3",
+        eveningSessionUrl = "https://archive.org/download/adkar_sabah_masae_safar/3%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3",
+        bundledMorningAsset = "audio/adhkar/sessions/sheikh_alafasy_morning.mp3",
+        bundledEveningAsset = "audio/adhkar/sessions/sheikh_alafasy_evening.mp3"
+    ),
+    HAMAD_AL_DURAYHIM(
+        id = "sheikh_hisn",
+        arabicName = "الشيخ حمد الدريهم (حصن المسلم)",
+        description = "كل ذكر منفرد بصوت شيخ حقيقي • مدمج بدون نت",
+        quranReciterId = "afs"
+    ),
+    NASSER_ALQATAMI(
+        id = "sheikh_qatami",
+        arabicName = "الشيخ ناصر القطامي",
+        description = "أذكار الصباح والمساء + تلاوة الآيات بصوته",
+        quranReciterId = "qtm",
+        morningSessionUrl = "https://archive.org/download/way2sona_20160320_2316/%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B5%D8%A8%D8%A7%D8%AD%20%D9%88%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20%D8%A8%D8%B5%D9%88%D8%AA%20%D8%A7%D9%84%D8%B4%D9%8A%D8%AE%20%D9%86%D8%A7%D8%B5%D8%B1%20%D8%A7%D9%84%D9%82%D8%B7%D8%A7%D9%85%D9%8A.mp3",
+        eveningSessionUrl = "https://archive.org/download/way2sona_20160320_2316/%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B5%D8%A8%D8%A7%D8%AD%20%D9%88%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20%D8%A8%D8%B5%D9%88%D8%AA%20%D8%A7%D9%84%D8%B4%D9%8A%D8%AE%20%D9%86%D8%A7%D8%B5%D8%B1%20%D8%A7%D9%84%D9%82%D8%B7%D8%A7%D9%85%D9%8A.mp3"
+    ),
+    SAAD_ALGHAMDI(
+        id = "sheikh_ghamdi",
+        arabicName = "الشيخ سعد الغامدي",
+        description = "أذكار الصباح بصوت الشيخ + تلاوة الآيات",
+        quranReciterId = "sgmd",
+        morningSessionUrl = "https://archive.org/download/20250607_20250607_1005/20250607_20250607_1005.mp3"
+    ),
+    YASSER_ALDOSSARY(
+        id = "sheikh_yasser",
+        arabicName = "الشيخ ياسر الدوسري",
+        description = "آيات الأذكار بصوت الدوسري + أذكار حصن المسلم",
+        quranReciterId = "yasser"
+    ),
+    MAHER_ALMUAIQLY(
+        id = "sheikh_maher",
+        arabicName = "الشيخ ماهر المعيقلي",
+        description = "آيات الأذكار بصوت المعيقلي + أذكار حصن المسلم",
+        quranReciterId = "maher"
+    );
+
+    companion object {
+        fun fromId(id: String): AdhkarSheikhVoice =
+            entries.find { it.id == id } ?: ALAFASY
+    }
+}
+
 enum class AdhkarVoicePreset(
     val id: String,
     val arabicName: String,

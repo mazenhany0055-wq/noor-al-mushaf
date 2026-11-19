@@ -29,37 +29,44 @@ jobs:
             keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Bundle offline Quran 604 pages & starter audio into APK assets
+      - name: Bundle offline Quran 604 pages & real Sheikh audio into APK assets
         run: |
           mkdir -p app/src/main/assets/audio/quran/yasser
           mkdir -p app/src/main/assets/audio/quran/afs
           mkdir -p app/src/main/assets/audio/ayahs/yasser
           mkdir -p app/src/main/assets/audio/ayahs/afs
+          mkdir -p app/src/main/assets/audio/ayahs/qtm
+          mkdir -p app/src/main/assets/audio/ayahs/sgmd
+          mkdir -p app/src/main/assets/audio/ayahs/maher
+          mkdir -p app/src/main/assets/audio/adhkar/hisn
+          mkdir -p app/src/main/assets/audio/adhkar/sessions
 
           python3 - << 'PYEOF'
-          import gzip, json, urllib.request
+          import gzip, json, os, re, urllib.request
+
+          def norm_ar(s):
+              s = re.sub(r'[\u064B-\u065F\u0670\u06D6-\u06ED\u0640]', '', s)
+              for a, b in [('أ','ا'),('إ','ا'),('آ','ا'),('ٱ','ا'),('ى','ي'),('ة','ه')]:
+                  s = s.replace(a, b)
+              s = re.sub(r'[^\u0621-\u064A\s]', ' ', s)
+              return re.sub(r'\s+', ' ', s).strip()
+
+          def download_bytes(url, timeout=25):
+              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  return resp.read()
+
+          # 1. Bundle 604-page Mushaf JSON.gz
           try:
-              req = urllib.request.Request(
-                  "https://api.alquran.cloud/v1/quran/quran-uthmani",
-                  headers={"User-Agent": "NoorAlMushaf-Builder/1.0"}
-              )
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  raw = json.loads(resp.read().decode("utf-8"))
-              surahs = raw.get("data", {}).get("surahs", [])
+              raw = json.loads(download_bytes("https://api.alquran.cloud/v1/quran/quran-uthmani", 30).decode("utf-8"))
               out = []
-              for surah in surahs:
-                  s_num = surah["number"]
-                  s_name = surah["name"]
+              for surah in raw.get("data", {}).get("surahs", []):
+                  s_num, s_name = surah["number"], surah["name"]
                   for ayah in surah.get("ayahs", []):
                       out.append({
-                          "g": ayah["number"],
-                          "s": s_num,
-                          "sn": s_name,
-                          "a": ayah["numberInSurah"],
-                          "t": ayah["text"],
-                          "p": ayah["page"],
-                          "j": ayah["juz"],
-                          "h": ayah["hizbQuarter"]
+                          "g": ayah["number"], "s": s_num, "sn": s_name,
+                          "a": ayah["numberInSurah"], "t": ayah["text"],
+                          "p": ayah["page"], "j": ayah["juz"], "h": ayah["hizbQuarter"]
                       })
               if len(out) >= 6200:
                   with gzip.open("app/src/main/assets/quran_pages.json.gz", "wt", encoding="utf-8") as gz:
@@ -67,12 +74,100 @@ jobs:
                   print(f"Bundled {len(out)} ayahs for 100% offline 604-page Mushaf")
           except Exception as e:
               print("Warning: Could not pre-bundle full Quran text:", e)
+
+          # 2. Bundle real Sheikh Hisn Al-Muslim MP3 clips for Adhkar & Periodic reminders
+          try:
+              hisn_data = json.loads(download_bytes("https://raw.githubusercontent.com/rn0x/Adhkar-json/main/adhkar.json", 30).decode("utf-8"))
+              hisn_entries = []
+              for cat in hisn_data:
+                  for item in cat.get("array", []):
+                      t = item.get("text", "")
+                      au = item.get("audio") or item.get("filename") or ""
+                      if t and au:
+                          hisn_entries.append((norm_ar(t), au))
+
+              targets = {
+                  "dhikr_m2": "أصبحنا وأصبح الملك لله والحمد لله لا إله إلا الله وحده لا شريك له له الملك وله الحمد وهو على كل شيء قدير",
+                  "dhikr_m3": "اللهم أنت ربي لا إله إلا أنت خلقتني وأنا عبدك وأنا على عهدك ووعدك ما استطعت",
+                  "dhikr_m4": "بسم الله الذي لا يضر مع اسمه شيء في الأرض ولا في السماء وهو السميع العليم",
+                  "dhikr_m5": "رضيت بالله ربا وبالإسلام دينا وبمحمد صلى الله عليه وسلم نبيا",
+                  "dhikr_m6": "حسبي الله لا إله إلا هو عليه توكلت وهو رب العرش العظيم",
+                  "dhikr_m7": "سبحان الله وبحمده",
+                  "dhikr_e1": "أمسينا وأمسى الملك لله والحمد لله لا إله إلا الله وحده لا شريك له",
+                  "dhikr_e2": "أعوذ بكلمات الله التامات من شر ما خلق",
+                  "dhikr_e3": "اللهم بك أمسينا وبك أصبحنا وبك نحيا وبك نموت وإليك المصير",
+                  "dhikr_e4": "اللهم عافني في بدني اللهم عافني في سمعي اللهم عافني في بصري لا إله إلا أنت",
+                  "dhikr_e5": "اللهم صل وسلم على نبينا محمد",
+                  "dhikr_p1": "أستغفر الله اللهم أنت السلام ومنك السلام تباركت يا ذا الجلال والإكرام",
+                  "dhikr_p2": "لا إله إلا الله وحده لا شريك له اللهم لا مانع لما أعطيت ولا معطي لما منعت",
+                  "dhikr_p3": "سبحان الله والحمد لله والله أكبر",
+                  "dhikr_p4": "اللهم أعني على ذكرك وشكرك وحسن عبادتك",
+                  "dhikr_s1": "باسمك ربي وضعت جنبي وبك أرفعه فإن أمسكت نفسي فارحمها",
+                  "dhikr_s2": "اللهم قني عذابك يوم تبعث عبادك",
+                  "dhikr_s3": "باسمك اللهم أموت وأحيا",
+                  "dhikr_w1": "الحمد لله الذي أحيانا بعد ما أماتنا وإليه النشور",
+                  "dhikr_w2": "الحمد لله الذي عافاني في جسدي ورد علي روحي وأذن لي بذكره",
+                  "periodic_0": "سبحان الله وبحمده سبحان الله العظيم",
+                  "periodic_1": "اللهم صل وسلم على نبينا محمد",
+                  "periodic_2": "لا إله إلا الله وحده لا شريك له له الملك وله الحمد وهو على كل شيء قدير",
+                  "periodic_3": "أستغفر الله العظيم وأتوب إليه",
+                  "periodic_4": "لا حول ولا قوة إلا بالله العلي العظيم",
+                  "periodic_5": "سبحان الله والحمد لله ولا إله إلا الله والله أكبر",
+                  "periodic_6": "حسبي الله لا إله إلا هو عليه توكلت وهو رب العرش العظيم",
+                  "periodic_7": "لا إله إلا أنت سبحانك إني كنت من الظالمين",
+                  "periodic_8": "يا حي يا قيوم برحمتك أستغيث",
+                  "periodic_9": "اللهم إني أسألك العفو والعافية في الدنيا والآخرة",
+                  "periodic_10": "رب اغفر لي ولوالدي وللمؤمنين والمؤمنات",
+                  "periodic_11": "الحمد لله حمدا كثيرا طيبا مباركا فيه",
+                  "periodic_12": "اللهم أعني على ذكرك وشكرك وحسن عبادتك",
+                  "periodic_13": "رضيت بالله ربا وبالإسلام دينا وبمحمد صلى الله عليه وسلم نبيا",
+                  "periodic_14": "سبحان الله وبحمده عدد خلقه ورضا نفسه وزنة عرشه ومداد كلماته",
+              }
+
+              def match_audio(target_text):
+                  nt = norm_ar(target_text)
+                  probe = nt[:26]
+                  best_audio, best_score = None, 0
+                  for cand, au in hisn_entries:
+                      if nt in cand or cand in nt:
+                          return au
+                      if len(probe) >= 10 and probe in cand:
+                          return au
+                      words = [w for w in nt.split() if len(w) >= 3][:6]
+                      hits = sum(1 for w in words if w in cand)
+                      if hits > best_score and hits >= 3:
+                          best_score, best_audio = hits, au
+                  return best_audio
+
+              bundled_clips = 0
+              for key, phrase in targets.items():
+                  au = match_audio(phrase)
+                  if not au:
+                      continue
+                  clean = au if au.startswith("/") else "/" + au
+                  urls = [au] if au.startswith("http") else [
+                      f"https://raw.githubusercontent.com/rn0x/Adhkar-json/main{clean}",
+                      f"https://www.hisnmuslim.com{clean}"
+                  ]
+                  for u in urls:
+                      try:
+                          data = download_bytes(u, 20)
+                          if len(data) > 2048 and not data[:32].lower().startswith((b"<!doctype", b"<html")):
+                              with open(f"app/src/main/assets/audio/adhkar/hisn/{key}.mp3", "wb") as f:
+                                  f.write(data)
+                              bundled_clips += 1
+                              break
+                      except Exception:
+                          continue
+              print(f"Bundled {bundled_clips} real Sheikh Hisn Al-Muslim Adhkar clips")
+          except Exception as e:
+              print("Warning: Could not pre-bundle Hisn Adhkar clips:", e)
           PYEOF
 
           fetch_mp3() {
             local url="$1"
             local dest="$2"
-            if curl -fsSL --max-time 25 -A "Mozilla/5.0" "$url" -o "$dest.tmp"; then
+            if curl -fsSL --max-time 30 -A "Mozilla/5.0" "$url" -o "$dest.tmp"; then
               local sz
               sz=$(wc -c < "$dest.tmp" || echo 0)
               if [ "$sz" -gt 16384 ] && ! head -c 32 "$dest.tmp" | grep -qiE "<!doctype|<html"; then
@@ -103,9 +198,20 @@ jobs:
               fetch_mp3 "https://server8.mp3quran.net/afs/$num.mp3" "app/src/main/assets/audio/quran/afs/$num.mp3" || true
           done
 
-          # Offline Ayat Al-Kursi for Adhkar reciters
-          fetch_mp3 "https://everyayah.com/data/Yasser_Ad-Dussary_128kbps/002255.mp3" "app/src/main/assets/audio/ayahs/yasser/002255.mp3" || true
-          fetch_mp3 "https://everyayah.com/data/Alafasy_128kbps/002255.mp3" "app/src/main/assets/audio/ayahs/afs/002255.mp3" || true
+          # Offline Quranic Adhkar Ayat across real Sheikhs
+          for aya in 002255 002201 003008 014040 020025; do
+            fetch_mp3 "https://everyayah.com/data/Yasser_Ad-Dussary_128kbps/$aya.mp3" "app/src/main/assets/audio/ayahs/yasser/$aya.mp3" || true
+            fetch_mp3 "https://everyayah.com/data/Alafasy_128kbps/$aya.mp3" "app/src/main/assets/audio/ayahs/afs/$aya.mp3" || true
+          done
+          fetch_mp3 "https://everyayah.com/data/Nasser_Alqatami_128kbps/002255.mp3" "app/src/main/assets/audio/ayahs/qtm/002255.mp3" || true
+          fetch_mp3 "https://everyayah.com/data/Ghamadi_40kbps/002255.mp3" "app/src/main/assets/audio/ayahs/sgmd/002255.mp3" || true
+          fetch_mp3 "https://everyayah.com/data/MaherAlMuaiqly128kbps/002255.mp3" "app/src/main/assets/audio/ayahs/maher/002255.mp3" || true
+
+          # Offline full Morning & Evening Adhkar by Sheikh Mishary Alafasy
+          fetch_mp3 "https://archive.org/download/adkar_sabah_masae_safar/2%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B5%D8%A8%D8%A7%D8%AD%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3" \
+            "app/src/main/assets/audio/adhkar/sessions/sheikh_alafasy_morning.mp3" || true
+          fetch_mp3 "https://archive.org/download/adkar_sabah_masae_safar/3%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3" \
+            "app/src/main/assets/audio/adhkar/sessions/sheikh_alafasy_evening.mp3" || true
 
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
@@ -133,6 +239,6 @@ jobs:
             gh release upload "$TAG" NoorAlMushaf.apk --clobber
           else
             gh release create "$TAG" NoorAlMushaf.apk \
-              --title "نور المصحف - الإصدار v1.2" \
-              --notes "تحديث v1.2: تشغيل صوت الأذان كاملاً تلقائياً، دعم العمل بدون إنترنت بالكامل، وتحسين كارت تفعيل الأذان التلقائي. اضغط على NoorAlMushaf.apk بالأسفل للتحميل والتثبيت."
+              --title "نور القرأن - الإصدار v1.2" \
+              --notes "تحديث v1.2: أصوات شيوخ حقيقيين في الأذكار (العفاسي، حمد الدريهم، ناصر القطامي، سعد الغامدي، ياسر الدوسري، ماهر المعيقلي)، استماع كامل لأذكار الصباح والمساء، وتشغيل الأذان كاملاً تلقائياً بدون نت."
           fi
