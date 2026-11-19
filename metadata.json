@@ -1,0 +1,6 @@
+{
+  "name": "نور المصحف",
+  "description": "تطبيق إسلامي متكامل: القرآن الكريم بصفحات المصحف، الاستماع لكبار الشيوخ، مواقيت الصلاة والأذان، المسبحة الإلكترونية، والأذكار والتذكير التلقائي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,56 @@
+name: Build NoorAlMushaf APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Prepare debug keystore
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          else
+            keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk NoorAlMushaf.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoorAlMushaf-APK
+          path: NoorAlMushaf.apk
+
+      - name: Publish APK in GitHub Releases (Direct Download)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apk-v1.${{ github.run_number }}"
+          gh release create "$TAG" NoorAlMushaf.apk \
+            --title "نور المصحف - نسخة أندرويد ($TAG)" \
+            --notes "اضغط على ملف NoorAlMushaf.apk بالأسفل لتحميل التطبيق وتثبيته مباشرة على هاتفك الأندرويد."
