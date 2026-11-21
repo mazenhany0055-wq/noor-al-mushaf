@@ -32,7 +32,7 @@ class LessonsRepository(context: Context) {
 
     private val appContext = context.applicationContext
     private val rootDir = File(appContext.filesDir, "offline_lessons").apply { mkdirs() }
-    private val cacheFile = File(rootDir, "youtube_official_lessons_v4.json")
+    private val cacheFile = File(rootDir, "youtube_official_lessons_v5.json")
     private val blacklistFile = File(rootDir, "broken_video_blacklist.json")
     private val favoritesFile = File(rootDir, "favorite_lessons.json")
     private val handleCacheFile = File(rootDir, "channel_id_cache.json")
@@ -188,18 +188,28 @@ class LessonsRepository(context: Context) {
 
         val collected = mutableListOf<ReligiousLesson>()
 
-        // 2. Fetch directly from the official channels' upload playlists via YouTube Data API v3
+        // 2. Fetch via YouTube Data API v3 using videoEmbeddable=true & videoSyndicated=true
         if (apiKey != null && channelIds.isNotEmpty()) {
             val channelJobs = channelIds.map { cid ->
                 async {
-                    val uploadsPlaylistId = "UU" + cid.removePrefix("UC")
-                    val playlistUrl =
-                        "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=$uploadsPlaylistId&maxResults=${perChannelLimit.coerceIn(1, 20)}&key=$apiKey"
-                    val json = fetchString(playlistUrl) ?: return@async emptyList()
-                    val ids = extractVideoIdsFromPlaylistJson(json)
-                    if (ids.isEmpty()) return@async emptyList()
+                    val encodedOrder = "date"
+                    val searchChannelUrl =
+                        "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&channelId=$cid&videoEmbeddable=true&videoSyndicated=true&order=$encodedOrder&maxResults=${perChannelLimit.coerceIn(1, 20)}&key=$apiKey"
+                    val searchRaw = fetchString(searchChannelUrl)
+                    val searchIds = searchRaw?.let { extractVideoIdsFromSearchJson(it) }.orEmpty()
+
+                    val candidateIds = if (searchIds.isNotEmpty()) {
+                        searchIds
+                    } else {
+                        val uploadsPlaylistId = "UU" + cid.removePrefix("UC")
+                        val playlistUrl =
+                            "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=$uploadsPlaylistId&maxResults=${perChannelLimit.coerceIn(1, 20)}&key=$apiKey"
+                        fetchString(playlistUrl)?.let { extractVideoIdsFromPlaylistJson(it) }.orEmpty()
+                    }
+                    if (candidateIds.isEmpty()) return@async emptyList()
+
                     verifyVideosWithDataApi(
-                        videoIds = ids,
+                        videoIds = candidateIds,
                         apiKey = apiKey,
                         scholarId = scholar.id,
                         fallbackScholarName = scholar.arabicName,
@@ -210,13 +220,14 @@ class LessonsRepository(context: Context) {
             }
             collected.addAll(channelJobs.awaitAll().flatten())
 
-            // For scholars who also need query refinement (e.g. Hussary rare TV broadcasts), query YouTube Data API scoped & verified
+            // Cross-channel fallback: if primary channel had < 4 embeddable videos (or all blocked by owner),
+            // search other allowed channels for the same scholar with videoEmbeddable=true & videoSyndicated=true
             if (collected.size < 4 && scholar.youtubeVideoSearchQueries.isNotEmpty()) {
-                val queryJobs = scholar.youtubeVideoSearchQueries.take(1).map { q ->
+                val queryJobs = scholar.youtubeVideoSearchQueries.take(2).map { q ->
                     async {
                         val encodedQ = URLEncoder.encode(q, "UTF-8")
                         val url =
-                            "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true&relevanceLanguage=ar&maxResults=10&q=$encodedQ&key=$apiKey"
+                            "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true&relevanceLanguage=ar&safeSearch=strict&maxResults=15&q=$encodedQ&key=$apiKey"
                         val raw = fetchString(url) ?: return@async emptyList()
                         val ids = extractVideoIdsFromSearchJson(raw)
                         if (ids.isEmpty()) return@async emptyList()
@@ -234,7 +245,7 @@ class LessonsRepository(context: Context) {
             }
         }
 
-        // 3. Fallback when YOUTUBE_API_KEY is missing/exhausted: Official YouTube Channel RSS Feeds + live YouTube oEmbed embeddability check
+        // 3. Fallback when YOUTUBE_API_KEY is missing/exhausted: Official YouTube Channel RSS Feeds + strict live embed verification
         if (collected.isEmpty() && channelIds.isNotEmpty()) {
             val rssJobs = channelIds.map { cid ->
                 async {
@@ -247,6 +258,21 @@ class LessonsRepository(context: Context) {
                 }
             }
             collected.addAll(rssJobs.awaitAll().flatten())
+        }
+
+        // 4. Cross-channel allowed fallback when API key is missing and primary channel blocks embedding
+        if (collected.isEmpty() && scholar.youtubeVideoSearchQueries.isNotEmpty()) {
+            val webFallbackJobs = scholar.youtubeVideoSearchQueries.take(2).map { q ->
+                async {
+                    fetchEmbeddableVideosFromWebSearchFallback(
+                        query = q,
+                        scholar = scholar,
+                        limit = perChannelLimit.coerceAtMost(8),
+                        markNewest = markNewest
+                    )
+                }
+            }
+            collected.addAll(webFallbackJobs.awaitAll().flatten())
         }
 
         filterAndDedupe(collected)
@@ -295,6 +321,7 @@ class LessonsRepository(context: Context) {
             val publishedAt = snippet.optString("publishedAt", "").take(10)
 
             val contentDetails = item.optJSONObject("contentDetails")
+            if (hasRestrictiveRegionOrAgeBlock(contentDetails)) continue
             val durationSec = parseIsoDurationSeconds(contentDetails?.optString("duration", "") ?: "")
             // Enforce fast-loading videos strictly between 1.5 min and 15 min (900 seconds max)
             if (durationSec < MIN_LESSON_DURATION_SECONDS || durationSec > MAX_LESSON_DURATION_SECONDS) continue
@@ -327,7 +354,15 @@ class LessonsRepository(context: Context) {
                 )
             )
         }
-        verified
+
+        // Second pass: live embed playability check to filter out Error 150 / 152 before showing in list
+        coroutineScope {
+            verified.map { lesson ->
+                async {
+                    if (verifyPlayableInEmbed(lesson.youtubeVideoId)) lesson else null
+                }
+            }.awaitAll().filterNotNull()
+        }
     }
 
     private suspend fun fetchFromOfficialChannelAtomFeed(
@@ -344,12 +379,12 @@ class LessonsRepository(context: Context) {
             .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, "", scholar.requireVisualAppearanceFilter) }
             .map { it.copy(title = cleanLessonTitle(it.title, scholar.arabicName), description = "", channelTitle = "") }
             .filter { it.title.isNotBlank() }
-            .take(limit.coerceAtMost(6))
+            .take(limit.coerceAtMost(8))
 
-        // Verify live embeddability + public availability via YouTube official oEmbed
+        // Verify both oEmbed & live YouTube embed page playability (eliminates Error 152/150 upfront)
         parsed.map { candidate ->
             async {
-                if (verifyVideoEmbeddableViaOEmbed(candidate.youtubeVideoId)) candidate else null
+                if (verifyPlayableInEmbed(candidate.youtubeVideoId)) candidate else null
             }
         }.awaitAll().filterNotNull()
     }
@@ -431,21 +466,147 @@ class LessonsRepository(context: Context) {
         ""
     }
 
-    private fun verifyVideoEmbeddableViaOEmbed(videoId: String): Boolean {
+    private fun hasRestrictiveRegionOrAgeBlock(contentDetails: JSONObject?): Boolean {
+        if (contentDetails == null) return false
+        val rating = contentDetails.optJSONObject("contentRating")
+        if (rating != null && rating.optString("ytRating", "") == "ytAgeRestricted") return true
+        val region = contentDetails.optJSONObject("regionRestriction")
+        val blocked = region?.optJSONArray("blocked")
+        if (blocked != null) {
+            for (i in 0 until blocked.length()) {
+                val code = blocked.optString(i, "").uppercase()
+                if (code == "EG" || code == "SA" || code == "AE") return true
+            }
+        }
+        return false
+    }
+
+    private suspend fun fetchEmbeddableVideosFromWebSearchFallback(
+        query: String,
+        scholar: LessonScholar,
+        limit: Int,
+        markNewest: Boolean
+    ): List<ReligiousLesson> = coroutineScope {
+        val encodedQ = URLEncoder.encode(query, "UTF-8")
+        // sp=EgIYAw%253D%253D filters to videos (~4-20 min) or plain search for broad compatibility
+        val searchHtml = fetchString("https://www.youtube.com/results?search_query=$encodedQ")
+            ?: return@coroutineScope emptyList()
+
+        val idMatcher = WEB_VIDEO_ID_PATTERN.matcher(searchHtml)
+        val candidateIds = linkedSetOf<String>()
+        while (idMatcher.find() && candidateIds.size < 12) {
+            val vid = idMatcher.group(1)
+            if (vid != null && YOUTUBE_VIDEO_ID_REGEX.matches(vid) && !isBlacklisted(vid)) {
+                candidateIds.add(vid)
+            }
+        }
+        if (candidateIds.isEmpty()) return@coroutineScope emptyList()
+
+        val shortKeyword = scholar.arabicName
+            .removePrefix("الشيخ ")
+            .removePrefix("د. ")
+            .split(" ")
+            .lastOrNull()
+            .orEmpty()
+
+        candidateIds.map { vid ->
+            async {
+                val meta = fetchOEmbedMeta(vid) ?: return@async null
+                val rawTitle = meta.first
+                val authorName = meta.second
+                if (rawTitle.isBlank()) return@async null
+                if (shortKeyword.length >= 3 &&
+                    !rawTitle.contains(shortKeyword, ignoreCase = true) &&
+                    !authorName.contains(shortKeyword, ignoreCase = true)
+                ) {
+                    return@async null
+                }
+                if (isLikelyTooLongByTitle(rawTitle)) return@async null
+                if (isLikelyAiOrStaticOrNonSpeaking(rawTitle, "", scholar.requireVisualAppearanceFilter)) {
+                    return@async null
+                }
+                val cleanTitle = cleanLessonTitle(rawTitle, scholar.arabicName)
+                if (cleanTitle.isBlank()) return@async null
+                val embedCheck = checkEmbedPlayableAndDuration(vid)
+                if (!embedCheck.first) return@async null
+                val dur = embedCheck.second
+                if (dur > 0L && (dur < MIN_LESSON_DURATION_SECONDS || dur > MAX_LESSON_DURATION_SECONDS)) {
+                    return@async null
+                }
+                ReligiousLesson(
+                    id = "yt_$vid",
+                    youtubeVideoId = vid,
+                    scholarId = scholar.id,
+                    scholarName = scholar.arabicName,
+                    channelId = "",
+                    channelTitle = "",
+                    title = cleanTitle,
+                    description = "",
+                    thumbnailUrl = "https://i.ytimg.com/vi/$vid/mqdefault.jpg",
+                    durationSeconds = dur,
+                    publishedDateLabel = "",
+                    isVerifiedOfficial = true,
+                    isNewArrival = markNewest
+                )
+            }
+        }.awaitAll().filterNotNull().take(limit)
+    }
+
+    private fun verifyPlayableInEmbed(videoId: String): Boolean {
+        if (!verifyVideoEmbeddableViaOEmbed(videoId)) return false
+        val (playable, dur) = checkEmbedPlayableAndDuration(videoId)
+        if (!playable) return false
+        if (dur > 0L && (dur < MIN_LESSON_DURATION_SECONDS || dur > MAX_LESSON_DURATION_SECONDS)) {
+            return false
+        }
+        return true
+    }
+
+    private fun checkEmbedPlayableAndDuration(videoId: String): Pair<Boolean, Long> {
+        return try {
+            val appOrigin = "https://${BuildConfig.APPLICATION_ID}"
+            val embedUrl = "https://www.youtube.com/embed/$videoId?autoplay=1&playsinline=1&origin=$appOrigin"
+            val req = Request.Builder()
+                .url(embedUrl)
+                .header("Referer", "$appOrigin/")
+                .header("User-Agent", MOBILE_CHROME_USER_AGENT)
+                .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return false to 0L
+                val html = resp.body?.string() ?: return false to 0L
+                if (isEmbedResponseBlocked(html)) return false to 0L
+                val durMatcher = EMBED_DURATION_PATTERN.matcher(html)
+                val durSec = if (durMatcher.find()) {
+                    durMatcher.group(1)?.toLongOrNull() ?: 0L
+                } else {
+                    0L
+                }
+                true to durSec
+            }
+        } catch (_: Exception) {
+            true to 0L
+        }
+    }
+
+    private fun verifyVideoEmbeddableViaOEmbed(videoId: String): Boolean = fetchOEmbedMeta(videoId) != null
+
+    private fun fetchOEmbedMeta(videoId: String): Pair<String, String>? {
         return try {
             val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
             val req = Request.Builder()
                 .url(oembedUrl)
-                .header("User-Agent", "NoorAlQuran-Android/1.3")
+                .header("User-Agent", MOBILE_CHROME_USER_AGENT)
                 .build()
             httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return false
-                val body = resp.body?.string() ?: return false
+                if (!resp.isSuccessful) return null
+                val body = resp.body?.string() ?: return null
                 val obj = JSONObject(body)
-                obj.optString("html", "").contains(videoId)
+                if (!obj.optString("html", "").contains(videoId)) return null
+                obj.optString("title", "") to obj.optString("author_name", "")
             }
         } catch (_: Exception) {
-            false
+            null
         }
     }
 
@@ -596,6 +757,7 @@ class LessonsRepository(context: Context) {
         try {
             File(rootDir, "lessons_catalog_cache.json").takeIf { it.exists() }?.delete()
             File(rootDir, "youtube_official_lessons_v3.json").takeIf { it.exists() }?.delete()
+            File(rootDir, "youtube_official_lessons_v4.json").takeIf { it.exists() }?.delete()
             File(rootDir, "media").takeIf { it.exists() }?.deleteRecursively()
         } catch (_: Exception) {
         }
@@ -730,9 +892,39 @@ class LessonsRepository(context: Context) {
     companion object {
         const val MIN_LESSON_DURATION_SECONDS = 90L
         const val MAX_LESSON_DURATION_SECONDS = 900L // 15 minutes max
+        const val MOBILE_CHROME_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+
+        fun isEmbedResponseBlocked(embedHtml: String): Boolean {
+            val lower = embedHtml.lowercase()
+            return lower.contains("\"status\":\"error\"") ||
+                lower.contains("\"status\":\"unplayable\"") ||
+                lower.contains("\"status\":\"login_required\"") ||
+                lower.contains("\"playableinembed\":false") ||
+                lower.contains("playback on other websites has been disabled") ||
+                lower.contains("التشغيل على المواقع") ||
+                lower.contains("unavailable_video") ||
+                (lower.contains("\"errorscreen\"") && (lower.contains("غير متوف") || lower.contains("unavailable")))
+        }
+
+        fun buildScholarYouTubeFallbackUrl(scholar: LessonScholar, blockedVideoId: String? = null): String {
+            if (!blockedVideoId.isNullOrBlank() && YOUTUBE_VIDEO_ID_REGEX.matches(blockedVideoId)) {
+                return "https://www.youtube.com/watch?v=$blockedVideoId"
+            }
+            scholar.officialChannelIds.firstOrNull { it.startsWith("UC") }?.let { cid ->
+                return "https://www.youtube.com/channel/$cid"
+            }
+            scholar.officialHandles.firstOrNull()?.let { handle ->
+                return "https://www.youtube.com/@${handle.removePrefix("@")}"
+            }
+            val q = URLEncoder.encode(scholar.arabicName, "UTF-8")
+            return "https://www.youtube.com/results?search_query=$q"
+        }
 
         private val YOUTUBE_VIDEO_ID_REGEX = Regex("^[A-Za-z0-9_-]{11}$")
         private val CHANNEL_ID_EXTRACTOR = Pattern.compile("\"(?:externalId|channelId|browseId)\"\\s*:\\s*\"(UC[A-Za-z0-9_-]{20,26})\"")
+        private val WEB_VIDEO_ID_PATTERN = Pattern.compile("\"videoId\"\\s*:\\s*\"([A-Za-z0-9_-]{11})\"")
+        private val EMBED_DURATION_PATTERN = Pattern.compile("\"(?:lengthSeconds|videoDurationSeconds)\"\\s*:\\s*\"?(\\d+)\"?")
 
         private val blockedAiOrStaticKeywords = listOf(
             "ذكاء اصطناعي", "الذكاء الاصطناعي", "بالذكاء الاصطناعي",

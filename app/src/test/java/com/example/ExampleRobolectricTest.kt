@@ -192,7 +192,36 @@ class ExampleRobolectricTest {
       publishedDateLabel = "2026-01-01",
       isVerifiedOfficial = true
     )
-    lessonsVm.handleBrokenOrSilentLesson(dummyBroken, "صامت")
+
+    // Verify Error 152 / unplayable / owner-disabled embed HTML detection
+    assertTrue(com.example.data.repository.LessonsRepository.isEmbedResponseBlocked("""{"playableInEmbed":false}"""))
+    assertTrue(com.example.data.repository.LessonsRepository.isEmbedResponseBlocked("""{"status":"UNPLAYABLE"}"""))
+    assertTrue(com.example.data.repository.LessonsRepository.isEmbedResponseBlocked("""{"status":"ERROR"}"""))
+    assertTrue(com.example.data.repository.LessonsRepository.isEmbedResponseBlocked("تم إيقاف التشغيل على المواقع الإلكترونية الأخرى"))
+    assertTrue(com.example.data.repository.LessonsRepository.isEmbedResponseBlocked("Playback on other websites has been disabled by the video owner"))
+    assertFalse(com.example.data.repository.LessonsRepository.isEmbedResponseBlocked("""<html><body><script>var ytcfg={};</script></body></html>"""))
+
+    // Verify fallback URL construction for Watch on YouTube button
+    val alkhamis = com.example.data.catalog.ScholarCatalog.scholars.first { it.id == "alkhamis" }
+    assertEquals(
+      "https://www.youtube.com/watch?v=abc12345678",
+      com.example.data.repository.LessonsRepository.buildScholarYouTubeFallbackUrl(alkhamis, "abc12345678")
+    )
+    assertTrue(
+      com.example.data.repository.LessonsRepository.buildScholarYouTubeFallbackUrl(alkhamis)
+        .startsWith("https://www.youtube.com/channel/")
+    )
+
+    // When a video breaks with no alternative available, handleBrokenOrSilentLesson removes it silently
+    // and exposes the "blocked by owner" fallback state with a Watch on YouTube link
+    lessonsVm.handleBrokenOrSilentLesson(dummyBroken, "error_152")
+    Thread.sleep(250)
+    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    assertNull(lessonsVm.uiState.value.activeLesson)
+    assertNull(lessonsVm.uiState.value.statusBanner)
+    assertTrue(lessonsVm.uiState.value.isScholarEmbedBlocked)
+    assertEquals("https://www.youtube.com/watch?v=abc12345678", lessonsVm.uiState.value.blockedFallbackYouTubeUrl)
+
     lessonsVm.closePlayer()
   }
 

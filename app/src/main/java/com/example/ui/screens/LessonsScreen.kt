@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.NewReleases
@@ -52,9 +55,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -82,6 +87,7 @@ fun LessonsScreen(
     onClosePlayer: () -> Unit,
     onDismissStatusBanner: () -> Unit
 ) {
+    val context = LocalContext.current
     val selectedScholar = remember(uiState.selectedScholarId) {
         ScholarCatalog.scholars.find { it.id == uiState.selectedScholarId }
             ?: ScholarCatalog.scholars.first()
@@ -342,8 +348,8 @@ fun LessonsScreen(
                 }
             }
 
-            // Empty / Loading State
-            if (displayedLessons.isEmpty() && !uiState.isSyncing) {
+            // Empty / Loading / Owner-Blocked State
+            if (displayedLessons.isEmpty() && uiState.isSyncing) {
                 item {
                     Card(
                         shape = RoundedCornerShape(18.dp),
@@ -353,9 +359,41 @@ fun LessonsScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .padding(28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(34.dp))
+                            Text(
+                                text = "جاري تجهيز الفيديوهات المسموح تشغيلها...",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else if (displayedLessons.isEmpty()) {
+                item {
+                    val youtubeUrl = uiState.blockedFallbackYouTubeUrl
+                        ?: LessonsRepository.buildScholarYouTubeFallbackUrl(selectedScholar)
+                    val nextScholar = ScholarCatalog.scholars.firstOrNull {
+                        it.id != selectedScholar.id && it.id != "latest"
+                    } ?: ScholarCatalog.scholars.first()
+
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("scholar_empty_or_blocked_card")
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
                                 .padding(24.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.OndemandVideo,
@@ -363,24 +401,85 @@ fun LessonsScreen(
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(44.dp)
                             )
-                            Text(
-                                text = if (uiState.showFavoritesOnly) {
-                                    "لا توجد دروس في المفضلة بعد"
-                                } else {
-                                    "جلب أحدث فيديوهات ${selectedScholar.arabicName}"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "يتم عرض الفيديوهات الرسمية الموثقة فقط التي يظهر فيها الشيخ بالصوت والصورة الحقيقية.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Button(onClick = onRefreshLessons) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("تحديث من القنوات الرسمية")
+
+                            if (uiState.showFavoritesOnly) {
+                                Text(
+                                    text = "لا توجد دروس في المفضلة بعد",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                            } else if (uiState.isScholarEmbedBlocked) {
+                                Text(
+                                    text = "الفيديوهات دي مقفولة من صاحبها، جرب شيخ تاني",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.testTag("scholar_blocked_message")
+                                )
+                                Button(
+                                    onClick = {
+                                        try {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(youtubeUrl))
+                                            )
+                                        } catch (_: Exception) {
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("watch_on_youtube_button")
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("شاهد على YouTube")
+                                }
+                                FilledTonalButton(
+                                    onClick = { onSelectScholar(nextScholar) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("try_another_scholar_button")
+                                ) {
+                                    Text("جرب شيخ تاني (${nextScholar.arabicName})")
+                                }
+                            } else {
+                                Text(
+                                    text = "جلب أحدث فيديوهات ${selectedScholar.arabicName}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    text = "يتم عرض الفيديوهات الرسمية الموثقة والمسموح تشغيلها داخل التطبيق فقط.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Button(
+                                    onClick = onRefreshLessons,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("تحديث من القنوات الرسمية")
+                                }
+                                FilledTonalButton(
+                                    onClick = {
+                                        try {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(youtubeUrl))
+                                            )
+                                        } catch (_: Exception) {
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("watch_on_youtube_button")
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("شاهد على YouTube")
+                                }
                             }
                         }
                     }

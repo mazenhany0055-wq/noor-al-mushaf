@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.NoorAlMushafApp
 import com.example.data.catalog.ScholarCatalog
+import com.example.data.repository.LessonsRepository
 import com.example.domain.model.LessonScholar
 import com.example.domain.model.ReligiousLesson
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +24,9 @@ data class LessonsUiState(
     val isSyncing: Boolean = false,
     val statusBanner: String? = null,
     val activeLesson: ReligiousLesson? = null,
-    val hasConfiguredApiKey: Boolean = false
+    val hasConfiguredApiKey: Boolean = false,
+    val isScholarEmbedBlocked: Boolean = false,
+    val blockedFallbackYouTubeUrl: String? = null
 )
 
 class LessonsViewModel(application: Application) : AndroidViewModel(application) {
@@ -81,10 +84,17 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
     private fun autoSyncLatest() {
         viewModelScope.launch {
             if (!lessonsRepo.isNetworkConnected()) return@launch
+            val latestScholar = ScholarCatalog.scholars.firstOrNull { it.id == "latest" } ?: return@launch
             _uiState.update { it.copy(isSyncing = true) }
             try {
-                ScholarCatalog.scholars.firstOrNull { it.id == "latest" }?.let {
-                    lessonsRepo.syncScholarLessons(it)
+                val synced = lessonsRepo.syncScholarLessons(latestScholar)
+                if (_uiState.value.selectedScholarId == latestScholar.id && synced.isEmpty()) {
+                    _uiState.update {
+                        it.copy(
+                            isScholarEmbedBlocked = true,
+                            blockedFallbackYouTubeUrl = LessonsRepository.buildScholarYouTubeFallbackUrl(latestScholar)
+                        )
+                    }
                 }
             } finally {
                 _uiState.update { it.copy(isSyncing = false) }
@@ -97,7 +107,9 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 selectedScholarId = scholar.id,
                 searchQuery = "",
-                statusBanner = null
+                statusBanner = null,
+                isScholarEmbedBlocked = false,
+                blockedFallbackYouTubeUrl = null
             )
         }
         viewModelScope.launch {
@@ -105,9 +117,22 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                 _uiState.update { it.copy(isSyncing = true) }
                 try {
                     val synced = lessonsRepo.syncScholarLessons(scholar)
-                    if (synced.isEmpty()) {
-                        _uiState.update {
-                            it.copy(statusBanner = "لا توجد فيديوهات موثقة متاحة حالياً لـ ${scholar.arabicName}")
+                    if (_uiState.value.selectedScholarId == scholar.id) {
+                        if (synced.isEmpty()) {
+                            _uiState.update {
+                                it.copy(
+                                    statusBanner = null,
+                                    isScholarEmbedBlocked = true,
+                                    blockedFallbackYouTubeUrl = LessonsRepository.buildScholarYouTubeFallbackUrl(scholar)
+                                )
+                            }
+                        } else {
+                            _uiState.update {
+                                it.copy(
+                                    isScholarEmbedBlocked = false,
+                                    blockedFallbackYouTubeUrl = null
+                                )
+                            }
                         }
                     }
                 } finally {
@@ -118,7 +143,12 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateSearchQuery(query: String) {
-        _uiState.update { it.copy(searchQuery = query) }
+        _uiState.update {
+            it.copy(
+                searchQuery = query,
+                isScholarEmbedBlocked = false
+            )
+        }
     }
 
     fun submitOnlineSearch() {
@@ -129,7 +159,13 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true, statusBanner = "جاري البحث والتحقق من فيديوهات: $q...") }
+            _uiState.update {
+                it.copy(
+                    isSyncing = true,
+                    statusBanner = "جاري البحث والتحقق من فيديوهات: $q...",
+                    isScholarEmbedBlocked = false
+                )
+            }
             try {
                 val found = lessonsRepo.searchYouTubeOfficialLessons(q)
                 _customSearchLessons.value = found
@@ -137,7 +173,7 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                     it.copy(
                         isSyncing = false,
                         statusBanner = if (found.isEmpty()) {
-                            "لم يُعثر على فيديوهات موثقة بالصوت والصورة لـ \"$q\""
+                            "لم يُعثر على فيديوهات موثقة مسموح تشغيلها لـ \"$q\""
                         } else {
                             null
                         }
@@ -157,18 +193,32 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true) }
+            _uiState.update {
+                it.copy(
+                    isSyncing = true,
+                    statusBanner = null,
+                    isScholarEmbedBlocked = false,
+                    blockedFallbackYouTubeUrl = null
+                )
+            }
             try {
                 val list = lessonsRepo.syncScholarLessons(scholar)
                 _uiState.update {
-                    it.copy(
-                        isSyncing = false,
-                        statusBanner = if (list.isNotEmpty()) {
-                            "تم تحديث القنوات الرسمية (${list.size} فيديو موثق بالصوت والصورة)"
-                        } else {
-                            "لا توجد فيديوهات متاحة حالياً لهذا الشيخ"
-                        }
-                    )
+                    if (list.isEmpty()) {
+                        it.copy(
+                            isSyncing = false,
+                            statusBanner = null,
+                            isScholarEmbedBlocked = true,
+                            blockedFallbackYouTubeUrl = LessonsRepository.buildScholarYouTubeFallbackUrl(scholar)
+                        )
+                    } else {
+                        it.copy(
+                            isSyncing = false,
+                            statusBanner = null,
+                            isScholarEmbedBlocked = false,
+                            blockedFallbackYouTubeUrl = null
+                        )
+                    }
                 }
             } catch (_: Exception) {
                 _uiState.update { it.copy(isSyncing = false) }
@@ -220,11 +270,13 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                 _uiState.update {
                     it.copy(
                         activeLesson = alternative,
-                        statusBanner = null
+                        statusBanner = null,
+                        isScholarEmbedBlocked = false,
+                        blockedFallbackYouTubeUrl = null
                     )
                 }
             } else {
-                // Attempt fresh silent sync from official channel before closing
+                // Attempt fresh silent sync from official & alternative allowed channels before closing
                 val scholar = ScholarCatalog.scholars.find { s -> s.id == _uiState.value.selectedScholarId }
                     ?: ScholarCatalog.scholars.find { s -> s.id == brokenLesson.scholarId }
                 val fresh = if (scholar != null && lessonsRepo.isNetworkConnected()) {
@@ -232,11 +284,27 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                         .firstOrNull { !sessionFailedVideoIds.contains(it.youtubeVideoId) }
                 } else null
 
-                _uiState.update {
-                    it.copy(
-                        activeLesson = fresh,
-                        statusBanner = null
-                    )
+                if (fresh != null) {
+                    _uiState.update {
+                        it.copy(
+                            activeLesson = fresh,
+                            statusBanner = null,
+                            isScholarEmbedBlocked = false,
+                            blockedFallbackYouTubeUrl = null
+                        )
+                    }
+                } else {
+                    val fallbackUrl = scholar?.let {
+                        LessonsRepository.buildScholarYouTubeFallbackUrl(it, brokenLesson.youtubeVideoId)
+                    } ?: "https://www.youtube.com/watch?v=${brokenLesson.youtubeVideoId}"
+                    _uiState.update {
+                        it.copy(
+                            activeLesson = null,
+                            statusBanner = null,
+                            isScholarEmbedBlocked = true,
+                            blockedFallbackYouTubeUrl = fallbackUrl
+                        )
+                    }
                 }
             }
         }
