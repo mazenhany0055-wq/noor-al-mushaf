@@ -519,7 +519,7 @@ fun HomePrayerScreen(
                                 color = MaterialTheme.colorScheme.onTertiaryContainer
                             )
                             Text(
-                                text = "الشعراوي، الحصري، الدوسري، سمير مصطفى، أحمد سمير وعزب • مع/بدون نت",
+                                text = "الشعراوي، الحصري، الدوسري، سمير مصطفى، أحمد سمير وعزب • قنوات يوتيوب الرسمية",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
                                 maxLines = 2,

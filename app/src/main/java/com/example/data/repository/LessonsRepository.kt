@@ -3,9 +3,9 @@ package com.example.data.repository
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.Uri
+import android.util.Xml
+import com.example.BuildConfig
 import com.example.data.catalog.ScholarCatalog
-import com.example.domain.model.LessonMediaType
 import com.example.domain.model.LessonScholar
 import com.example.domain.model.ReligiousLesson
 import kotlinx.coroutines.Dispatchers
@@ -21,68 +21,46 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
 import java.io.File
-import java.io.FileOutputStream
+import java.io.StringReader
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.util.regex.Pattern
 
 class LessonsRepository(context: Context) {
 
     private val appContext = context.applicationContext
     private val rootDir = File(appContext.filesDir, "offline_lessons").apply { mkdirs() }
-    private val mediaDir = File(rootDir, "media").apply { mkdirs() }
-    private val cacheFile = File(rootDir, "lessons_catalog_cache.json")
+    private val cacheFile = File(rootDir, "youtube_official_lessons_v3.json")
+    private val blacklistFile = File(rootDir, "broken_video_blacklist.json")
+    private val favoritesFile = File(rootDir, "favorite_lessons.json")
+    private val handleCacheFile = File(rootDir, "channel_id_cache.json")
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
     private val _lessonsByScholar = MutableStateFlow<Map<String, List<ReligiousLesson>>>(emptyMap())
     val lessonsByScholar: StateFlow<Map<String, List<ReligiousLesson>>> = _lessonsByScholar.asStateFlow()
 
-    private val _offlineLessonFiles = MutableStateFlow<Map<String, String>>(emptyMap())
-    val offlineLessonFiles: StateFlow<Map<String, String>> = _offlineLessonFiles.asStateFlow()
+    private val _favoriteVideoIds = MutableStateFlow<Set<String>>(emptySet())
+    val favoriteVideoIds: StateFlow<Set<String>> = _favoriteVideoIds.asStateFlow()
 
-    private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
-    val downloadProgress: StateFlow<Map<String, Float>> = _downloadProgress.asStateFlow()
-
-    private val _totalOfflineBytes = MutableStateFlow(0L)
-    val totalOfflineBytes: StateFlow<Long> = _totalOfflineBytes.asStateFlow()
+    private val blacklistedVideoIds = mutableSetOf<String>()
+    private val resolvedHandleCache = mutableMapOf<String, String>()
 
     init {
+        purgeLegacyNonYouTubeFiles()
+        loadBlacklist()
+        loadHandleCache()
+        loadFavorites()
         loadCachedLessons()
-        refreshOfflineFilesIndex()
     }
 
-    fun refreshOfflineFilesIndex() {
-        val map = mutableMapOf<String, String>()
-        var bytes = 0L
-        mediaDir.listFiles()?.forEach { file ->
-            if (file.isFile && !file.name.endsWith(".tmp") && file.length() > 4096L) {
-                map[file.nameWithoutExtension] = file.absolutePath
-                bytes += file.length()
-            }
-        }
-        _offlineLessonFiles.value = map
-        _totalOfflineBytes.value = bytes
-    }
-
-    fun getPlayableUri(lesson: ReligiousLesson): Uri {
-        val key = sanitizeId(lesson.id)
-        val localPath = _offlineLessonFiles.value[key]
-        if (localPath != null) {
-            val file = File(localPath)
-            if (file.exists() && file.length() > 4096L) {
-                return Uri.fromFile(file)
-            }
-        }
-        return Uri.parse(lesson.mediaUrl)
-    }
-
-    fun isDownloadedOffline(lessonId: String): Boolean =
-        _offlineLessonFiles.value.containsKey(sanitizeId(lessonId))
+    fun hasConfiguredYouTubeApiKey(): Boolean = validApiKeyOrNull() != null
 
     fun isNetworkConnected(): Boolean {
         return try {
@@ -96,86 +74,66 @@ class LessonsRepository(context: Context) {
         }
     }
 
+    fun toggleFavorite(youtubeVideoId: String) {
+        _favoriteVideoIds.update { cur ->
+            val next = if (cur.contains(youtubeVideoId)) cur - youtubeVideoId else cur + youtubeVideoId
+            persistStringSet(favoritesFile, next)
+            next
+        }
+    }
+
+    suspend fun removeAndBlacklistLesson(lesson: ReligiousLesson) = withContext(Dispatchers.IO) {
+        synchronized(blacklistedVideoIds) {
+            blacklistedVideoIds.add(lesson.youtubeVideoId)
+            persistStringSet(blacklistFile, blacklistedVideoIds)
+        }
+        _lessonsByScholar.update { currentMap ->
+            currentMap.mapValues { (_, list) ->
+                list.filterNot { it.youtubeVideoId == lesson.youtubeVideoId }
+            }
+        }
+        _favoriteVideoIds.update { cur ->
+            if (cur.contains(lesson.youtubeVideoId)) {
+                val next = cur - lesson.youtubeVideoId
+                persistStringSet(favoritesFile, next)
+                next
+            } else cur
+        }
+        persistCachedLessons()
+    }
+
     suspend fun syncScholarLessons(scholar: LessonScholar): List<ReligiousLesson> =
         withContext(Dispatchers.IO) {
             if (!isNetworkConnected()) {
                 return@withContext _lessonsByScholar.value[scholar.id].orEmpty()
             }
 
-            val discovered = mutableListOf<ReligiousLesson>()
-
             if (scholar.id == "latest") {
-                // Auto-fetch newest Arabic Islamic video lessons from IslamHouse + Archive.org
-                coroutineScope {
-                    val ihJob = async { fetchIslamHouseLatestVideos() }
-                    val iaLatestJob = async {
-                        searchArchiveOrgLessons(
-                            scholarId = "latest",
-                            defaultScholarName = "علماء ودعاة",
-                            query = scholar.archiveSearchQueries.first(),
-                            sortBy = "publicdate desc",
-                            rows = 12,
-                            markAsNew = true
-                        )
-                    }
-                    discovered.addAll(ihJob.await())
-                    discovered.addAll(iaLatestJob.await())
+                // Auto-sync newest videos across the primary official scholar channels
+                val coreScholars = ScholarCatalog.scholars.filter { it.id != "latest" }
+                val fetched = coroutineScope {
+                    coreScholars.map { s ->
+                        async { fetchOfficialVideosForScholar(s, perChannelLimit = 4, markNewest = true) }
+                    }.awaitAll().flatten()
                 }
-            } else {
-                // Fetch dynamic Archive.org collections + curated fallback identifiers in parallel
-                coroutineScope {
-                    val queryJobs = scholar.archiveSearchQueries.map { q ->
-                        async {
-                            searchArchiveOrgLessons(
-                                scholarId = scholar.id,
-                                defaultScholarName = scholar.arabicName,
-                                query = q,
-                                sortBy = "downloads desc",
-                                rows = 10,
-                                markAsNew = false
-                            )
-                        }
-                    }
-                    val recentJobs = scholar.archiveSearchQueries.take(1).map { q ->
-                        async {
-                            searchArchiveOrgLessons(
-                                scholarId = scholar.id,
-                                defaultScholarName = scholar.arabicName,
-                                query = q,
-                                sortBy = "publicdate desc",
-                                rows = 5,
-                                markAsNew = true
-                            )
-                        }
-                    }
-                    val fallbackJobs = scholar.fallbackIdentifiers.map { identifier ->
-                        async {
-                            fetchLessonsFromArchiveIdentifier(
-                                identifier = identifier,
-                                titleHint = scholar.arabicName,
-                                scholarId = scholar.id,
-                                scholarName = scholar.arabicName,
-                                descriptionHint = scholar.titleOrSpecialty,
-                                publishedDate = "",
-                                isNewArrival = false,
-                                maxFiles = 12
-                            )
-                        }
-                    }
-                    (queryJobs + recentJobs + fallbackJobs).awaitAll().forEach { list ->
-                        discovered.addAll(list)
-                    }
+                val clean = filterAndDedupe(fetched)
+                    .sortedByDescending { it.publishedDateLabel }
+                    .take(40)
+                if (clean.isNotEmpty()) {
+                    _lessonsByScholar.update { it + ("latest" to clean) }
+                    persistCachedLessons()
                 }
+                return@withContext _lessonsByScholar.value["latest"].orEmpty()
             }
 
+            val fetched = fetchOfficialVideosForScholar(scholar, perChannelLimit = 14, markNewest = false)
             val existing = _lessonsByScholar.value[scholar.id].orEmpty()
-            val merged = (discovered + existing)
-                .distinctBy { it.mediaUrl }
+            val merged = filterAndDedupe(fetched + existing)
                 .sortedWith(
-                    compareByDescending<ReligiousLesson> { it.mediaType == LessonMediaType.VIDEO }
-                        .thenByDescending { it.isNewArrival }
+                    compareByDescending<ReligiousLesson> { it.isNewArrival }
+                        .thenByDescending { it.publishedDateLabel }
                 )
-                .take(45)
+                .take(40)
 
             if (merged.isNotEmpty()) {
                 _lessonsByScholar.update { it + (scholar.id to merged) }
@@ -184,322 +142,438 @@ class LessonsRepository(context: Context) {
             merged
         }
 
-    suspend fun searchCustomScholarOrTopic(query: String): List<ReligiousLesson> =
+    suspend fun searchYouTubeOfficialLessons(query: String): List<ReligiousLesson> =
         withContext(Dispatchers.IO) {
-            if (!isNetworkConnected() || query.isBlank()) return@withContext emptyList()
-            val clean = query.trim().replace("\"", "")
-            val luceneQuery = "\"$clean\""
-            val results = mutableListOf<ReligiousLesson>()
-            coroutineScope {
-                val moviesJob = async {
-                    searchArchiveOrgLessons(
-                        scholarId = "custom_${clean.hashCode()}",
-                        defaultScholarName = clean,
-                        query = luceneQuery,
-                        sortBy = "downloads desc",
-                        rows = 12,
-                        markAsNew = false
-                    )
-                }
-                val latestJob = async {
-                    searchArchiveOrgLessons(
-                        scholarId = "custom_${clean.hashCode()}",
-                        defaultScholarName = clean,
-                        query = luceneQuery,
-                        sortBy = "publicdate desc",
-                        rows = 6,
-                        markAsNew = true
-                    )
-                }
-                results.addAll(latestJob.await())
-                results.addAll(moviesJob.await())
+            val cleanQuery = query.trim()
+            if (cleanQuery.isBlank()) return@withContext emptyList()
+
+            if (!isNetworkConnected()) {
+                return@withContext searchLocalCached(cleanQuery)
             }
-            results.distinctBy { it.mediaUrl }
+
+            val apiKey = validApiKeyOrNull() ?: return@withContext searchLocalCached(cleanQuery)
+            val encodedQ = URLEncoder.encode(cleanQuery, "UTF-8")
+            val searchUrl =
+                "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true&relevanceLanguage=ar&safeSearch=strict&maxResults=15&q=$encodedQ&key=$apiKey"
+            val raw = fetchString(searchUrl) ?: return@withContext searchLocalCached(cleanQuery)
+
+            val candidateIds = extractVideoIdsFromSearchJson(raw)
+            if (candidateIds.isEmpty()) return@withContext emptyList()
+
+            val verified = verifyVideosWithDataApi(
+                videoIds = candidateIds,
+                apiKey = apiKey,
+                scholarId = "search_${cleanQuery.hashCode()}",
+                fallbackScholarName = cleanQuery,
+                requireVisualFilter = false,
+                markNewest = false
+            )
+            filterAndDedupe(verified)
         }
 
-    suspend fun downloadLesson(lesson: ReligiousLesson): Result<File> =
-        withContext(Dispatchers.IO) {
-            val safeKey = sanitizeId(lesson.id)
-            val ext = if (lesson.mediaType == LessonMediaType.VIDEO || lesson.mediaUrl.lowercase().contains(".mp4")) {
-                "mp4"
-            } else {
-                "mp3"
-            }
-            val target = File(mediaDir, "$safeKey.$ext")
-            if (target.exists() && target.length() > 8192L) {
-                refreshOfflineFilesIndex()
-                return@withContext Result.success(target)
-            }
-
-            val temp = File(mediaDir, "$safeKey.$ext.tmp")
-            _downloadProgress.update { it + (lesson.id to 0.02f) }
-
-            return@withContext try {
-                val request = Request.Builder()
-                    .url(lesson.mediaUrl)
-                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
-                    .build()
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        _downloadProgress.update { it - lesson.id }
-                        return@withContext Result.failure(IllegalStateException("HTTP ${response.code}"))
-                    }
-                    val body = response.body ?: run {
-                        _downloadProgress.update { it - lesson.id }
-                        return@withContext Result.failure(IllegalStateException("Empty body"))
-                    }
-                    val total = body.contentLength()
-                    body.byteStream().use { input ->
-                        FileOutputStream(temp).use { output ->
-                            val buf = ByteArray(32 * 1024)
-                            var downloaded = 0L
-                            var read: Int
-                            while (input.read(buf).also { read = it } != -1) {
-                                output.write(buf, 0, read)
-                                downloaded += read
-                                if (total > 0L) {
-                                    _downloadProgress.update {
-                                        it + (lesson.id to (downloaded.toFloat() / total.toFloat()).coerceIn(0.02f, 0.99f))
-                                    }
-                                }
-                            }
-                            output.flush()
-                        }
-                    }
-                    if (temp.length() < 8192L) {
-                        temp.delete()
-                        _downloadProgress.update { it - lesson.id }
-                        return@withContext Result.failure(IllegalStateException("Invalid media file"))
-                    }
-                    if (target.exists()) target.delete()
-                    if (!temp.renameTo(target)) {
-                        temp.copyTo(target, overwrite = true)
-                        temp.delete()
-                    }
-                    _downloadProgress.update { it - lesson.id }
-                    refreshOfflineFilesIndex()
-                    Result.success(target)
-                }
-            } catch (e: Exception) {
-                if (temp.exists()) temp.delete()
-                _downloadProgress.update { it - lesson.id }
-                Result.failure(e)
-            }
-        }
-
-    suspend fun deleteDownloadedLesson(lessonId: String) = withContext(Dispatchers.IO) {
-        val safeKey = sanitizeId(lessonId)
-        mediaDir.listFiles()?.forEach { file ->
-            if (file.nameWithoutExtension == safeKey) {
-                file.delete()
-            }
-        }
-        refreshOfflineFilesIndex()
-    }
-
-    private suspend fun searchArchiveOrgLessons(
-        scholarId: String,
-        defaultScholarName: String,
-        query: String,
-        sortBy: String,
-        rows: Int,
-        markAsNew: Boolean
+    private suspend fun fetchOfficialVideosForScholar(
+        scholar: LessonScholar,
+        perChannelLimit: Int,
+        markNewest: Boolean
     ): List<ReligiousLesson> = coroutineScope {
-        val fullQuery = "($query) AND (mediatype:movies OR mediatype:audio)"
-        val encodedQ = URLEncoder.encode(fullQuery, "UTF-8")
-        val encodedSort = URLEncoder.encode(sortBy, "UTF-8")
-        val searchUrl =
-            "https://archive.org/advancedsearch.php?q=$encodedQ&fl[]=identifier&fl[]=title&fl[]=description&fl[]=creator&fl[]=publicdate&fl[]=mediatype&sort[]=$encodedSort&rows=$rows&page=1&output=json"
+        val apiKey = validApiKeyOrNull()
 
-        val jsonText = fetchString(searchUrl) ?: return@coroutineScope emptyList()
-        val docs = try {
-            JSONObject(jsonText).optJSONObject("response")?.optJSONArray("docs") ?: return@coroutineScope emptyList()
-        } catch (_: Exception) {
-            return@coroutineScope emptyList()
+        // 1. Resolve all official channel IDs (both hardcoded UC... and @handles)
+        val channelIds = mutableSetOf<String>()
+        channelIds.addAll(scholar.officialChannelIds.filter { isValidChannelId(it) })
+        val handleJobs = scholar.officialHandles.map { handle ->
+            async { resolveChannelIdFromHandle(handle, apiKey) }
         }
+        handleJobs.awaitAll().filterNotNull().forEach { channelIds.add(it) }
 
-        val jobs = (0 until docs.length()).map { i ->
-            async {
-                val doc = docs.optJSONObject(i) ?: return@async emptyList()
-                val identifier = doc.optString("identifier", "").takeIf { it.isNotBlank() }
-                    ?: return@async emptyList()
-                val itemTitle = doc.optString("title", "").ifBlank { defaultScholarName }
-                val creator = doc.optString("creator", "").ifBlank { defaultScholarName }
-                val desc = doc.optString("description", "").take(180)
-                val pubDate = doc.optString("publicdate", "").take(10)
+        val collected = mutableListOf<ReligiousLesson>()
 
-                fetchLessonsFromArchiveIdentifier(
-                    identifier = identifier,
-                    titleHint = itemTitle,
-                    scholarId = scholarId,
-                    scholarName = if (scholarId == "latest") creator else defaultScholarName,
-                    descriptionHint = desc,
-                    publishedDate = pubDate,
-                    isNewArrival = markAsNew,
-                    maxFiles = 4
-                )
-            }
-        }
-        jobs.awaitAll().flatten()
-    }
-
-    private fun fetchLessonsFromArchiveIdentifier(
-        identifier: String,
-        titleHint: String,
-        scholarId: String,
-        scholarName: String,
-        descriptionHint: String,
-        publishedDate: String,
-        isNewArrival: Boolean,
-        maxFiles: Int
-    ): List<ReligiousLesson> {
-        val metaUrl = "https://archive.org/metadata/$identifier/files"
-        val jsonText = fetchString(metaUrl) ?: return emptyList()
-        val filesArray = try {
-            JSONObject(jsonText).optJSONArray("result")
-                ?: JSONObject(jsonText).optJSONArray("files")
-                ?: return emptyList()
-        } catch (_: Exception) {
-            return emptyList()
-        }
-
-        val mp4Files = mutableListOf<JSONObject>()
-        val mp3Files = mutableListOf<JSONObject>()
-
-        for (i in 0 until filesArray.length()) {
-            val f = filesArray.optJSONObject(i) ?: continue
-            val name = f.optString("name", "")
-            val format = f.optString("format", "").lowercase()
-            val size = f.optString("size", "0").toLongOrNull() ?: 0L
-            if (name.isBlank() || size < 150_000L) continue
-            if (name.endsWith(".mp4", ignoreCase = true) || format.contains("h.264") || format.contains("mpeg4")) {
-                mp4Files.add(f)
-            } else if (name.endsWith(".mp3", ignoreCase = true) || format.contains("mp3")) {
-                mp3Files.add(f)
-            }
-        }
-
-        // Prefer HD MP4 videos (original or h.264), otherwise fall back to MP3 audio lectures
-        val selectedFiles = if (mp4Files.isNotEmpty()) mp4Files else mp3Files
-        val isVideoList = mp4Files.isNotEmpty()
-
-        return selectedFiles
-            .distinctBy { it.optString("name").substringBeforeLast('.') }
-            .take(maxFiles)
-            .mapNotNull { fileObj ->
-                val rawName = fileObj.optString("name", "")
-                if (rawName.isBlank()) return@mapNotNull null
-                val encodedPath = rawName.split("/").joinToString("/") { seg ->
-                    URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
+        // 2. Fetch directly from the official channels' upload playlists via YouTube Data API v3
+        if (apiKey != null && channelIds.isNotEmpty()) {
+            val channelJobs = channelIds.map { cid ->
+                async {
+                    val uploadsPlaylistId = "UU" + cid.removePrefix("UC")
+                    val playlistUrl =
+                        "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=$uploadsPlaylistId&maxResults=${perChannelLimit.coerceIn(1, 20)}&key=$apiKey"
+                    val json = fetchString(playlistUrl) ?: return@async emptyList()
+                    val ids = extractVideoIdsFromPlaylistJson(json)
+                    if (ids.isEmpty()) return@async emptyList()
+                    verifyVideosWithDataApi(
+                        videoIds = ids,
+                        apiKey = apiKey,
+                        scholarId = scholar.id,
+                        fallbackScholarName = scholar.arabicName,
+                        requireVisualFilter = scholar.requireVisualAppearanceFilter,
+                        markNewest = markNewest
+                    )
                 }
-                val directUrl = "https://archive.org/download/$identifier/$encodedPath"
-                val baseTitle = rawName.substringAfterLast('/').substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim()
-                val displayTitle = if (selectedFiles.size == 1 || baseTitle.length < 4) {
-                    titleHint
-                } else {
-                    "$titleHint — $baseTitle"
-                }
-                val duration = fileObj.optString("length", "0").toDoubleOrNull()?.toLong() ?: 0L
-                val sizeBytes = fileObj.optString("size", "0").toLongOrNull() ?: 0L
-                val matchingAudio = if (isVideoList) {
-                    val stem = rawName.substringBeforeLast('.')
-                    mp3Files.firstOrNull { it.optString("name").substringBeforeLast('.') == stem }
-                        ?.optString("name")
-                        ?.let { mp3Name ->
-                            val encMp3 = mp3Name.split("/").joinToString("/") { seg ->
-                                URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
-                            }
-                            "https://archive.org/download/$identifier/$encMp3"
-                        }
-                } else null
-
-                ReligiousLesson(
-                    id = "ia_${identifier}_${rawName.hashCode().toUInt()}",
-                    scholarId = scholarId,
-                    scholarName = scholarName,
-                    title = displayTitle,
-                    description = descriptionHint.ifBlank { "درس ديني مرئي وصوتي من أرشيف الإنترنت" },
-                    mediaUrl = directUrl,
-                    alternateAudioUrl = matchingAudio,
-                    thumbnailUrl = "https://archive.org/services/img/$identifier",
-                    mediaType = if (isVideoList) LessonMediaType.VIDEO else LessonMediaType.AUDIO,
-                    durationSeconds = duration,
-                    fileSizeBytes = sizeBytes,
-                    publishedDateLabel = publishedDate,
-                    sourceLabel = if (isVideoList) "فيديو HD" else "صوتي MP3",
-                    isNewArrival = isNewArrival
-                )
             }
-    }
+            collected.addAll(channelJobs.awaitAll().flatten())
 
-    private suspend fun fetchIslamHouseLatestVideos(): List<ReligiousLesson> = coroutineScope {
-        val listUrl = "https://api3.islamhouse.com/v3/paV29H2gm56kvLPy/main/videos/ar/ar/1/14/json"
-        val raw = fetchString(listUrl) ?: return@coroutineScope emptyList()
-        val dataArray = try {
-            JSONObject(raw).optJSONArray("data") ?: return@coroutineScope emptyList()
-        } catch (_: Exception) {
-            return@coroutineScope emptyList()
-        }
-
-        val itemJobs = (0 until dataArray.length().coerceAtMost(10)).map { i ->
-            async {
-                val summary = dataArray.optJSONObject(i) ?: return@async null
-                val id = summary.optLong("id", 0L)
-                if (id == 0L) return@async null
-                val detailJson = fetchString("https://api3.islamhouse.com/v3/paV29H2gm56kvLPy/main/get-item/$id/ar/json")
-                    ?: return@async null
-                val obj = try {
-                    JSONObject(detailJson)
-                } catch (_: Exception) {
-                    return@async null
-                }
-
-                val title = obj.optString("title", "").ifBlank { return@async null }
-                val desc = obj.optString("description", "")
-                val thumb = obj.optString("image", "").ifBlank { null }
-                val preparedBy = obj.optJSONArray("prepared_by")
-                val scholarName = preparedBy?.optJSONObject(0)?.optString("title", "")?.ifBlank { "علماء ودعاة" } ?: "علماء ودعاة"
-                val attachments = obj.optJSONArray("attachments") ?: return@async null
-
-                var bestMp4: String? = null
-                var bestMp3: String? = null
-                for (aIdx in 0 until attachments.length()) {
-                    val att = attachments.optJSONObject(aIdx) ?: continue
-                    val u = att.optString("url", "")
-                    val ext = att.optString("extension_type", "").lowercase()
-                    if (u.startsWith("http") && (ext == "mp4" || u.lowercase().contains(".mp4"))) {
-                        if (bestMp4 == null) bestMp4 = u
-                    } else if (u.startsWith("http") && (ext == "mp3" || u.lowercase().contains(".mp3"))) {
-                        if (bestMp3 == null) bestMp3 = u
+            // For scholars who also need query refinement (e.g. Hussary rare TV broadcasts), query YouTube Data API scoped & verified
+            if (collected.size < 4 && scholar.youtubeVideoSearchQueries.isNotEmpty()) {
+                val queryJobs = scholar.youtubeVideoSearchQueries.take(1).map { q ->
+                    async {
+                        val encodedQ = URLEncoder.encode(q, "UTF-8")
+                        val url =
+                            "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true&relevanceLanguage=ar&maxResults=10&q=$encodedQ&key=$apiKey"
+                        val raw = fetchString(url) ?: return@async emptyList()
+                        val ids = extractVideoIdsFromSearchJson(raw)
+                        if (ids.isEmpty()) return@async emptyList()
+                        verifyVideosWithDataApi(
+                            videoIds = ids,
+                            apiKey = apiKey,
+                            scholarId = scholar.id,
+                            fallbackScholarName = scholar.arabicName,
+                            requireVisualFilter = scholar.requireVisualAppearanceFilter,
+                            markNewest = markNewest
+                        )
                     }
                 }
-
-                val finalUrl = bestMp4 ?: bestMp3 ?: return@async null
-                val type = if (bestMp4 != null) LessonMediaType.VIDEO else LessonMediaType.AUDIO
-
-                ReligiousLesson(
-                    id = "ih_$id",
-                    scholarId = "latest",
-                    scholarName = scholarName,
-                    title = title,
-                    description = desc.ifBlank { "مادة جديدة مضافة تلقائياً عبر IslamHouse" },
-                    mediaUrl = finalUrl,
-                    alternateAudioUrl = bestMp3,
-                    thumbnailUrl = thumb,
-                    mediaType = type,
-                    sourceLabel = if (type == LessonMediaType.VIDEO) "جديد • فيديو HD" else "جديد • صوتي",
-                    isNewArrival = true
-                )
+                collected.addAll(queryJobs.awaitAll().flatten())
             }
         }
-        itemJobs.awaitAll().filterNotNull()
+
+        // 3. Fallback when YOUTUBE_API_KEY is missing/exhausted: Official YouTube Channel RSS Feeds + live YouTube oEmbed embeddability check
+        if (collected.isEmpty() && channelIds.isNotEmpty()) {
+            val rssJobs = channelIds.map { cid ->
+                async {
+                    fetchFromOfficialChannelAtomFeed(
+                        channelId = cid,
+                        scholar = scholar,
+                        limit = perChannelLimit,
+                        markNewest = markNewest
+                    )
+                }
+            }
+            collected.addAll(rssJobs.awaitAll().flatten())
+        }
+
+        filterAndDedupe(collected)
     }
+
+    private suspend fun verifyVideosWithDataApi(
+        videoIds: List<String>,
+        apiKey: String,
+        scholarId: String,
+        fallbackScholarName: String,
+        requireVisualFilter: Boolean,
+        markNewest: Boolean
+    ): List<ReligiousLesson> = withContext(Dispatchers.IO) {
+        val cleanIds = videoIds
+            .filter { YOUTUBE_VIDEO_ID_REGEX.matches(it) && !isBlacklisted(it) }
+            .distinct()
+            .take(25)
+        if (cleanIds.isEmpty()) return@withContext emptyList()
+
+        val videosUrl =
+            "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${cleanIds.joinToString(",")}&key=$apiKey"
+        val raw = fetchString(videosUrl) ?: return@withContext emptyList()
+        val items = try {
+            JSONObject(raw).optJSONArray("items") ?: return@withContext emptyList()
+        } catch (_: Exception) {
+            return@withContext emptyList()
+        }
+
+        val verified = mutableListOf<ReligiousLesson>()
+        for (i in 0 until items.length()) {
+            val item = items.optJSONObject(i) ?: continue
+            val videoId = item.optString("id", "")
+            if (!YOUTUBE_VIDEO_ID_REGEX.matches(videoId) || isBlacklisted(videoId)) continue
+
+            val status = item.optJSONObject("status") ?: continue
+            if (!status.optBoolean("embeddable", false)) continue
+            if (status.optString("privacyStatus", "") != "public") continue
+            val uploadStatus = status.optString("uploadStatus", "processed")
+            if (uploadStatus != "processed" && uploadStatus.isNotBlank()) continue
+
+            val snippet = item.optJSONObject("snippet") ?: continue
+            val title = snippet.optString("title", "").trim()
+            val description = snippet.optString("description", "").trim()
+            val channelId = snippet.optString("channelId", "")
+            val channelTitle = snippet.optString("channelTitle", fallbackScholarName)
+            val publishedAt = snippet.optString("publishedAt", "").take(10)
+
+            val contentDetails = item.optJSONObject("contentDetails")
+            val durationSec = parseIsoDurationSeconds(contentDetails?.optString("duration", "") ?: "")
+            // Reject YouTube Shorts, bumper clips, or broken 0s uploads
+            if (durationSec in 1L until 90L || durationSec == 0L) continue
+
+            if (isLikelyAiOrStaticOrNonSpeaking(title, description, requireVisualFilter)) continue
+
+            val thumbs = snippet.optJSONObject("thumbnails")
+            val thumbUrl = thumbs?.optJSONObject("high")?.optString("url")
+                ?: thumbs?.optJSONObject("medium")?.optString("url")
+                ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+
+            verified.add(
+                ReligiousLesson(
+                    id = "yt_$videoId",
+                    youtubeVideoId = videoId,
+                    scholarId = scholarId,
+                    scholarName = fallbackScholarName.ifBlank { channelTitle },
+                    channelId = channelId,
+                    channelTitle = channelTitle,
+                    title = title,
+                    description = description.take(220),
+                    thumbnailUrl = thumbUrl,
+                    durationSeconds = durationSec,
+                    publishedDateLabel = publishedAt,
+                    isVerifiedOfficial = true,
+                    isNewArrival = markNewest
+                )
+            )
+        }
+        verified
+    }
+
+    private suspend fun fetchFromOfficialChannelAtomFeed(
+        channelId: String,
+        scholar: LessonScholar,
+        limit: Int,
+        markNewest: Boolean
+    ): List<ReligiousLesson> = coroutineScope {
+        val feedUrl = "https://www.youtube.com/feeds/videos.xml?channel_id=$channelId"
+        val xmlText = fetchString(feedUrl) ?: return@coroutineScope emptyList()
+        val parsed = parseYouTubeAtomFeed(xmlText, channelId, scholar, markNewest)
+            .filterNot { isBlacklisted(it.youtubeVideoId) }
+            .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, it.description, scholar.requireVisualAppearanceFilter) }
+            .take(limit)
+
+        // Verify live embeddability + public availability via YouTube official oEmbed
+        parsed.map { candidate ->
+            async {
+                if (verifyVideoEmbeddableViaOEmbed(candidate.youtubeVideoId)) candidate else null
+            }
+        }.awaitAll().filterNotNull()
+    }
+
+    private fun parseYouTubeAtomFeed(
+        xmlText: String,
+        channelId: String,
+        scholar: LessonScholar,
+        markNewest: Boolean
+    ): List<ReligiousLesson> {
+        val list = mutableListOf<ReligiousLesson>()
+        try {
+            val parser = Xml.newPullParser()
+            parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+            parser.setInput(StringReader(xmlText))
+
+            var inEntry = false
+            var channelAuthor = scholar.arabicName
+            var videoId = ""
+            var title = ""
+            var published = ""
+            var description = ""
+            var thumbUrl = ""
+
+            var eventType = parser.eventType
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                val tag = parser.name ?: ""
+                when (eventType) {
+                    XmlPullParser.START_TAG -> {
+                        when (tag) {
+                            "entry" -> {
+                                inEntry = true
+                                videoId = ""
+                                title = ""
+                                published = ""
+                                description = ""
+                                thumbUrl = ""
+                            }
+                            "yt:videoId" -> if (inEntry) videoId = safeNextText(parser).trim()
+                            "title" -> if (inEntry) title = safeNextText(parser).trim()
+                            "published" -> if (inEntry) published = safeNextText(parser).trim().take(10)
+                            "media:description" -> if (inEntry) description = safeNextText(parser).trim().take(220)
+                            "media:thumbnail" -> if (inEntry) {
+                                thumbUrl = parser.getAttributeValue(null, "url") ?: ""
+                            }
+                            "name" -> if (!inEntry) {
+                                channelAuthor = safeNextText(parser).trim().ifBlank { scholar.arabicName }
+                            }
+                        }
+                    }
+                    XmlPullParser.END_TAG -> {
+                        if (tag == "entry" && inEntry) {
+                            inEntry = false
+                            if (YOUTUBE_VIDEO_ID_REGEX.matches(videoId) && title.isNotBlank()) {
+                                list.add(
+                                    ReligiousLesson(
+                                        id = "yt_$videoId",
+                                        youtubeVideoId = videoId,
+                                        scholarId = scholar.id,
+                                        scholarName = scholar.arabicName,
+                                        channelId = channelId,
+                                        channelTitle = channelAuthor,
+                                        title = title,
+                                        description = description,
+                                        thumbnailUrl = thumbUrl.ifBlank { "https://i.ytimg.com/vi/$videoId/hqdefault.jpg" },
+                                        durationSeconds = 0L,
+                                        publishedDateLabel = published,
+                                        isVerifiedOfficial = true,
+                                        isNewArrival = markNewest
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                eventType = parser.next()
+            }
+        } catch (_: Exception) {
+        }
+        return list
+    }
+
+    private fun safeNextText(parser: XmlPullParser): String = try {
+        parser.nextText() ?: ""
+    } catch (_: Exception) {
+        ""
+    }
+
+    private fun verifyVideoEmbeddableViaOEmbed(videoId: String): Boolean {
+        return try {
+            val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
+            val req = Request.Builder()
+                .url(oembedUrl)
+                .header("User-Agent", "NoorAlQuran-Android/1.3")
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return false
+                val body = resp.body?.string() ?: return false
+                val obj = JSONObject(body)
+                obj.optString("html", "").contains(videoId)
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun resolveChannelIdFromHandle(rawHandle: String, apiKey: String?): String? {
+        val cleanHandle = rawHandle.trim().removePrefix("@")
+        if (cleanHandle.isBlank()) return null
+
+        synchronized(resolvedHandleCache) {
+            resolvedHandleCache[cleanHandle]?.let { if (isValidChannelId(it)) return it }
+        }
+
+        // Method 1: YouTube Data API v3 channels?forHandle
+        if (apiKey != null) {
+            val encodedHandle = URLEncoder.encode(cleanHandle, "UTF-8")
+            val url =
+                "https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=$encodedHandle&key=$apiKey"
+            val json = fetchString(url)
+            if (json != null) {
+                try {
+                    val items = JSONObject(json).optJSONArray("items")
+                    val cid = items?.optJSONObject(0)?.optString("id", "")
+                    if (cid != null && isValidChannelId(cid)) {
+                        saveResolvedHandle(cleanHandle, cid)
+                        return cid
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        // Method 2: Official YouTube channel page canonical channel ID extraction
+        val encodedPath = URLEncoder.encode(cleanHandle, "UTF-8").replace("+", "%20")
+        val html = fetchString("https://www.youtube.com/@$encodedPath") ?: return null
+        val matcher = CHANNEL_ID_EXTRACTOR.matcher(html)
+        if (matcher.find()) {
+            val cid = matcher.group(1)
+            if (cid != null && isValidChannelId(cid)) {
+                saveResolvedHandle(cleanHandle, cid)
+                return cid
+            }
+        }
+        return null
+    }
+
+    private fun saveResolvedHandle(handle: String, channelId: String) {
+        synchronized(resolvedHandleCache) {
+            resolvedHandleCache[handle] = channelId
+            try {
+                val obj = JSONObject()
+                resolvedHandleCache.forEach { (k, v) -> obj.put(k, v) }
+                handleCacheFile.writeText(obj.toString(), Charsets.UTF_8)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun extractVideoIdsFromPlaylistJson(json: String): List<String> {
+        return try {
+            val items = JSONObject(json).optJSONArray("items") ?: return emptyList()
+            (0 until items.length()).mapNotNull { i ->
+                val obj = items.optJSONObject(i) ?: return@mapNotNull null
+                val vid = obj.optJSONObject("contentDetails")?.optString("videoId")
+                    ?: obj.optJSONObject("snippet")?.optJSONObject("resourceId")?.optString("videoId")
+                vid?.takeIf { YOUTUBE_VIDEO_ID_REGEX.matches(it) }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun extractVideoIdsFromSearchJson(json: String): List<String> {
+        return try {
+            val items = JSONObject(json).optJSONArray("items") ?: return emptyList()
+            (0 until items.length()).mapNotNull { i ->
+                val vid = items.optJSONObject(i)?.optJSONObject("id")?.optString("videoId")
+                vid?.takeIf { YOUTUBE_VIDEO_ID_REGEX.matches(it) }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun searchLocalCached(query: String): List<ReligiousLesson> {
+        val q = query.trim()
+        return _lessonsByScholar.value.values
+            .flatten()
+            .filter {
+                !isBlacklisted(it.youtubeVideoId) &&
+                    (it.title.contains(q, ignoreCase = true) ||
+                        it.scholarName.contains(q, ignoreCase = true) ||
+                        it.description.contains(q, ignoreCase = true))
+            }
+            .distinctBy { it.youtubeVideoId }
+    }
+
+    private fun filterAndDedupe(list: List<ReligiousLesson>): List<ReligiousLesson> {
+        return list
+            .filter { YOUTUBE_VIDEO_ID_REGEX.matches(it.youtubeVideoId) }
+            .filterNot { isBlacklisted(it.youtubeVideoId) }
+            .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, it.description, false) }
+            .distinctBy { it.youtubeVideoId }
+    }
+
+    private fun isBlacklisted(videoId: String): Boolean = synchronized(blacklistedVideoIds) {
+        blacklistedVideoIds.contains(videoId)
+    }
+
+    private fun validApiKeyOrNull(): String? {
+        val raw = BuildConfig.YOUTUBE_API_KEY.trim()
+        if (raw.isBlank() ||
+            raw.equals("REPLACE_WITH_YOUR_YOUTUBE_API_KEY", ignoreCase = true) ||
+            raw.equals("YOUR_API_KEY", ignoreCase = true)
+        ) {
+            return null
+        }
+        return raw
+    }
+
+    private fun isValidChannelId(cid: String): Boolean =
+        cid.startsWith("UC") && cid.length >= 22
 
     private fun fetchString(url: String): String? {
         return try {
             val req = Request.Builder()
                 .url(url)
-                .header("User-Agent", "NoorAlQuran-Android/1.3")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36")
+                .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
                 .build()
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) null else resp.body?.string()
@@ -509,40 +583,89 @@ class LessonsRepository(context: Context) {
         }
     }
 
-    private fun loadCachedLessons() {
-        val map = mutableMapOf<String, MutableList<ReligiousLesson>>()
-        if (cacheFile.exists()) {
-            try {
-                val root = JSONObject(cacheFile.readText(Charsets.UTF_8))
-                val keys = root.keys()
+    private fun purgeLegacyNonYouTubeFiles() {
+        try {
+            File(rootDir, "lessons_catalog_cache.json").takeIf { it.exists() }?.delete()
+            File(rootDir, "media").takeIf { it.exists() }?.deleteRecursively()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadBlacklist() {
+        if (!blacklistFile.exists()) return
+        try {
+            val arr = JSONArray(blacklistFile.readText(Charsets.UTF_8))
+            synchronized(blacklistedVideoIds) {
+                for (i in 0 until arr.length()) {
+                    arr.optString(i).takeIf { it.isNotBlank() }?.let { blacklistedVideoIds.add(it) }
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadFavorites() {
+        if (!favoritesFile.exists()) return
+        try {
+            val arr = JSONArray(favoritesFile.readText(Charsets.UTF_8))
+            val set = mutableSetOf<String>()
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotBlank() }?.let { set.add(it) }
+            }
+            _favoriteVideoIds.value = set
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadHandleCache() {
+        if (!handleCacheFile.exists()) return
+        try {
+            val obj = JSONObject(handleCacheFile.readText(Charsets.UTF_8))
+            val keys = obj.keys()
+            synchronized(resolvedHandleCache) {
                 while (keys.hasNext()) {
-                    val scholarId = keys.next()
-                    val arr = root.optJSONArray(scholarId) ?: continue
-                    val list = mutableListOf<ReligiousLesson>()
-                    for (i in 0 until arr.length()) {
-                        arr.optJSONObject(i)?.let { list.add(lessonFromJson(it)) }
-                    }
-                    if (list.isNotEmpty()) {
-                        map[scholarId] = list
+                    val k = keys.next()
+                    val v = obj.optString(k)
+                    if (isValidChannelId(v)) resolvedHandleCache[k] = v
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun persistStringSet(file: File, set: Set<String>) {
+        try {
+            val arr = JSONArray()
+            set.forEach { arr.put(it) }
+            file.writeText(arr.toString(), Charsets.UTF_8)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadCachedLessons() {
+        if (!cacheFile.exists()) return
+        val map = mutableMapOf<String, List<ReligiousLesson>>()
+        try {
+            val root = JSONObject(cacheFile.readText(Charsets.UTF_8))
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val scholarId = keys.next()
+                val arr = root.optJSONArray(scholarId) ?: continue
+                val list = mutableListOf<ReligiousLesson>()
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { lessonFromJson(it) }?.let { item ->
+                        if (YOUTUBE_VIDEO_ID_REGEX.matches(item.youtubeVideoId) && !isBlacklisted(item.youtubeVideoId)) {
+                            list.add(item)
+                        }
                     }
                 }
-            } catch (_: Exception) {
+                if (list.isNotEmpty()) {
+                    map[scholarId] = list
+                }
             }
+            _lessonsByScholar.value = map
+        } catch (_: Exception) {
         }
-
-        // Seed bundled starter lessons for scholars not cached yet so first open is never empty
-        val latestList = map.getOrPut("latest") { mutableListOf() }
-        ScholarCatalog.starterVerifiedLessons.forEach { starter ->
-            val scholarBucket = map.getOrPut(starter.scholarId) { mutableListOf() }
-            if (scholarBucket.none { it.mediaUrl == starter.mediaUrl }) {
-                scholarBucket.add(starter)
-            }
-            if (latestList.none { it.mediaUrl == starter.mediaUrl }) {
-                latestList.add(starter)
-            }
-        }
-
-        _lessonsByScholar.value = map.mapValues { it.value.toList() }
     }
 
     private fun persistCachedLessons() {
@@ -560,46 +683,85 @@ class LessonsRepository(context: Context) {
 
     private fun lessonToJson(l: ReligiousLesson): JSONObject = JSONObject().apply {
         put("id", l.id)
+        put("youtubeVideoId", l.youtubeVideoId)
         put("scholarId", l.scholarId)
         put("scholarName", l.scholarName)
+        put("channelId", l.channelId)
+        put("channelTitle", l.channelTitle)
         put("title", l.title)
         put("description", l.description)
-        put("mediaUrl", l.mediaUrl)
-        put("alternateAudioUrl", l.alternateAudioUrl ?: "")
-        put("thumbnailUrl", l.thumbnailUrl ?: "")
-        put("mediaType", l.mediaType.name)
+        put("thumbnailUrl", l.thumbnailUrl)
         put("durationSeconds", l.durationSeconds)
-        put("fileSizeBytes", l.fileSizeBytes)
         put("publishedDateLabel", l.publishedDateLabel)
-        put("sourceLabel", l.sourceLabel)
+        put("isVerifiedOfficial", l.isVerifiedOfficial)
         put("isNewArrival", l.isNewArrival)
     }
 
-    private fun lessonFromJson(o: JSONObject): ReligiousLesson {
-        val typeName = o.optString("mediaType", LessonMediaType.VIDEO.name)
-        val type = runCatching { LessonMediaType.valueOf(typeName) }.getOrDefault(LessonMediaType.VIDEO)
+    private fun lessonFromJson(o: JSONObject): ReligiousLesson? {
+        val vid = o.optString("youtubeVideoId", "")
+        if (!YOUTUBE_VIDEO_ID_REGEX.matches(vid)) return null
         return ReligiousLesson(
-            id = o.optString("id"),
-            scholarId = o.optString("scholarId"),
-            scholarName = o.optString("scholarName"),
-            title = o.optString("title"),
-            description = o.optString("description"),
-            mediaUrl = o.optString("mediaUrl"),
-            alternateAudioUrl = o.optString("alternateAudioUrl").takeIf { it.isNotBlank() },
-            thumbnailUrl = o.optString("thumbnailUrl").takeIf { it.isNotBlank() },
-            mediaType = type,
+            id = o.optString("id", "yt_$vid"),
+            youtubeVideoId = vid,
+            scholarId = o.optString("scholarId", "latest"),
+            scholarName = o.optString("scholarName", ""),
+            channelId = o.optString("channelId", ""),
+            channelTitle = o.optString("channelTitle", ""),
+            title = o.optString("title", ""),
+            description = o.optString("description", ""),
+            thumbnailUrl = o.optString("thumbnailUrl", "https://i.ytimg.com/vi/$vid/hqdefault.jpg"),
             durationSeconds = o.optLong("durationSeconds", 0L),
-            fileSizeBytes = o.optLong("fileSizeBytes", 0L),
             publishedDateLabel = o.optString("publishedDateLabel", ""),
-            sourceLabel = o.optString("sourceLabel", "Archive.org"),
+            isVerifiedOfficial = o.optBoolean("isVerifiedOfficial", true),
             isNewArrival = o.optBoolean("isNewArrival", false)
         )
     }
 
-    private fun sanitizeId(raw: String): String =
-        raw.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-
     companion object {
+        private val YOUTUBE_VIDEO_ID_REGEX = Regex("^[A-Za-z0-9_-]{11}$")
+        private val CHANNEL_ID_EXTRACTOR = Pattern.compile("\"(?:externalId|channelId|browseId)\"\\s*:\\s*\"(UC[A-Za-z0-9_-]{20,26})\"")
+
+        private val blockedAiOrStaticKeywords = listOf(
+            "ذكاء اصطناعي", "الذكاء الاصطناعي", "بالذكاء الاصطناعي",
+            "صوت آلي", "صوت مولد", "بدون صوت", "صامت",
+            "صورة ثابتة", "audio only", "mp3", "شاشة سوداء",
+            "#shorts", "shorts", "قصة حياة الشيخ", "وثائقي عن الشيخ", "معلومات عن الشيخ"
+        )
+
+        private val visualAppearanceHints = listOf(
+            "مرئية", "فيديو", "تلفزيون", "نور على نور", "خطبة", "محاضرة", "درس", "لقاء", "حفل"
+        )
+
+        fun isLikelyAiOrStaticOrNonSpeaking(
+            title: String,
+            description: String,
+            requireVisualHint: Boolean
+        ): Boolean {
+            val combined = "$title $description".lowercase()
+            if (blockedAiOrStaticKeywords.any { combined.contains(it.lowercase()) }) {
+                return true
+            }
+            if (requireVisualHint && visualAppearanceHints.none { combined.contains(it) }) {
+                return true
+            }
+            return false
+        }
+
+        fun parseIsoDurationSeconds(iso: String): Long {
+            if (!iso.startsWith("PT") && !iso.startsWith("P")) return 0L
+            var total = 0L
+            val regex = Regex("(\\d+)([HMS])")
+            regex.findAll(iso).forEach { match ->
+                val num = match.groupValues[1].toLongOrNull() ?: 0L
+                when (match.groupValues[2]) {
+                    "H" -> total += num * 3600L
+                    "M" -> total += num * 60L
+                    "S" -> total += num
+                }
+            }
+            return total
+        }
+
         fun formatDuration(seconds: Long): String {
             if (seconds <= 0L) return ""
             val h = seconds / 3600
@@ -609,16 +771,6 @@ class LessonsRepository(context: Context) {
                 String.format("%d:%02d:%02d", h, m, s)
             } else {
                 String.format("%02d:%02d", m, s)
-            }
-        }
-
-        fun formatSizeMb(bytes: Long): String {
-            if (bytes <= 0L) return ""
-            val mb = bytes / (1024.0 * 1024.0)
-            return if (mb >= 1024.0) {
-                String.format("%.1f ج.ب", mb / 1024.0)
-            } else {
-                String.format("%.1f م.ب", mb)
             }
         }
     }

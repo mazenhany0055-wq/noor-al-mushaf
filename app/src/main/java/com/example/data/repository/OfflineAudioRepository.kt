@@ -223,7 +223,6 @@ class OfflineAudioRepository(context: Context) {
         withContext(Dispatchers.IO) {
             getOfflineAyahUri(reciterId, surahNumber, ayahNumber)?.let { return@withContext it }
             val reciter = QuranCatalog.reciters.find { it.id == reciterId }
-                ?: QuranCatalog.reciters.find { it.id == "afs" }
                 ?: return@withContext null
             val url = reciter.everyAyahUrl(surahNumber, ayahNumber) ?: return@withContext null
             val s = surahNumber.toString().padStart(3, '0')

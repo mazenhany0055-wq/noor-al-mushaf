@@ -2,6 +2,7 @@ plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
+  alias(libs.plugins.secrets)
 }
 
 android {
@@ -64,6 +65,10 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  secrets {
+    propertiesFileName = ".env"
+    defaultPropertiesFileName = ".env.example"
+  }
 }
 
 // Some unused dependencies are commented out below instead of being removed.
@@ -115,7 +120,7 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.session)
   implementation(libs.androidx.media3.common)
-  implementation(libs.androidx.media3.ui)
+  // implementation(libs.androidx.media3.ui)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

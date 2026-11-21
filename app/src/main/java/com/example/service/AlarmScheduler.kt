@@ -74,7 +74,6 @@ object AlarmScheduler {
             val intent = Intent(context, AdhanAlarmReceiver::class.java).apply {
                 putExtra(AdhanAlarmReceiver.EXTRA_PRAYER_NAME, prayer.arabicName)
                 putExtra(AdhanAlarmReceiver.EXTRA_ADHAN_VOICE, settings.adhanVoice.id)
-                putExtra(AdhanAlarmReceiver.EXTRA_TTS_VOICE_ID, settings.adhkarVoiceId)
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,

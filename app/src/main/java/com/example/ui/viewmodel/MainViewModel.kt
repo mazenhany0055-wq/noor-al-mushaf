@@ -14,7 +14,6 @@ import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.CalculationMethod
 import com.example.domain.model.CityPreset
 import com.example.domain.model.DailyPrayerSchedule
-import com.example.domain.model.OfflineTtsVoiceInfo
 import com.example.domain.model.PeriodicDhikrMode
 import com.example.domain.model.PrayerName
 import com.example.domain.prayer.PrayerTimeCalculator
@@ -83,7 +82,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val offlineAdhanIds: StateFlow<Set<String>> = offlineAudioRepo.offlineAdhanIds
     val offlineAdhkarSessionKeys: StateFlow<Set<String>> = offlineAudioRepo.offlineAdhkarSessionKeys
     val totalOfflineAudioBytes: StateFlow<Long> = offlineAudioRepo.totalStorageBytes
-    val availableSystemVoices: StateFlow<List<OfflineTtsVoiceInfo>> = dhikrSpeaker.availableSystemVoices
 
     val isFullMushafBundled: Boolean by lazy { app.quranRepository.isFullMushafBundled() }
 
@@ -271,7 +269,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val serviceIntent = Intent(appContext, AdhanPlaybackService::class.java).apply {
             putExtra(AdhanPlaybackService.EXTRA_PRAYER_NAME, prayerLabel)
             putExtra(AdhanPlaybackService.EXTRA_VOICE_ID, current.adhanVoice.id)
-            putExtra(AdhanPlaybackService.EXTRA_TTS_VOICE_ID, current.adhkarVoiceId)
         }
         val started = try {
             ContextCompat.startForegroundService(appContext, serviceIntent)
@@ -439,10 +436,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     phraseText = phrase,
                     voiceId = current.adhkarVoiceId,
                     chimeBefore = current.adhkarChimeBeforeVoice,
-                    useMediaUsage = true
+                    useMediaUsage = true,
+                    onUnavailable = { msg -> showBanner(msg) }
                 )
             }
-            showBanner(phrase)
+            if (_activeBannerMessage.value == null || !current.periodicDhikrMode.includesVoice) {
+                showBanner(phrase)
+            }
         }
     }
 

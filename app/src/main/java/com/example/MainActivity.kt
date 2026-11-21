@@ -144,9 +144,7 @@ private fun NoorAlMushafAppShell(
     val adhkarState by adhkarViewModel.uiState.collectAsStateWithLifecycle()
     val lessonsState by lessonsViewModel.uiState.collectAsStateWithLifecycle()
     val displayedLessons by lessonsViewModel.displayedLessons.collectAsStateWithLifecycle()
-    val offlineLessonFiles by lessonsViewModel.offlineLessonFiles.collectAsStateWithLifecycle()
-    val lessonDownloadProgress by lessonsViewModel.downloadProgress.collectAsStateWithLifecycle()
-    val lessonOfflineBytes by lessonsViewModel.totalOfflineBytes.collectAsStateWithLifecycle()
+    val favoriteVideoIds by lessonsViewModel.favoriteVideoIds.collectAsStateWithLifecycle()
 
     val isFullScreenReader = currentRoute?.startsWith("mushaf_reader") == true
 
@@ -319,15 +317,13 @@ private fun NoorAlMushafAppShell(
                         LessonsScreen(
                             uiState = lessonsState,
                             displayedLessons = displayedLessons,
-                            offlineLessonFiles = offlineLessonFiles,
-                            downloadProgress = lessonDownloadProgress,
-                            totalOfflineBytes = lessonOfflineBytes,
+                            favoriteVideoIds = favoriteVideoIds,
                             onSelectScholar = { lessonsViewModel.selectScholar(it) },
                             onSearchQueryChange = { lessonsViewModel.updateSearchQuery(it) },
                             onSubmitSearch = { lessonsViewModel.submitOnlineSearch() },
                             onRefreshLessons = { lessonsViewModel.refreshCurrentScholar() },
-                            onToggleOfflineOnly = { lessonsViewModel.setShowOfflineOnly(it) },
-                            onSelectMediaFilter = { lessonsViewModel.setMediaFilter(it) },
+                            onToggleFavoritesOnly = { lessonsViewModel.setShowFavoritesOnly(it) },
+                            onToggleFavorite = { lessonsViewModel.toggleFavorite(it) },
                             onOpenLesson = { lesson ->
                                 if (audioState.isPlaying) {
                                     mainViewModel.audioManager.togglePlayPause()
@@ -335,9 +331,9 @@ private fun NoorAlMushafAppShell(
                                 adhkarViewModel.stopSpeaking()
                                 lessonsViewModel.openLesson(lesson)
                             },
-                            onDownloadLesson = { lessonsViewModel.downloadLesson(it) },
-                            onDeleteDownloadedLesson = { lessonsViewModel.deleteDownloadedLesson(it) },
-                            onTogglePlayerAudioOnly = { lessonsViewModel.togglePlayerAudioOnly() },
+                            onBrokenVideoDetected = { brokenLesson, reason ->
+                                lessonsViewModel.handleBrokenOrSilentLesson(brokenLesson, reason)
+                            },
                             onClosePlayer = { lessonsViewModel.closePlayer() },
                             onDismissStatusBanner = { lessonsViewModel.clearStatusBanner() }
                         )
@@ -401,7 +397,8 @@ private fun NoorAlMushafAppShell(
                                     chimeBefore = settings.adhkarChimeBeforeVoice
                                 )
                             },
-                            onStopSpeaking = { adhkarViewModel.stopSpeaking() }
+                            onStopSpeaking = { adhkarViewModel.stopSpeaking() },
+                            onDismissVoiceStatus = { adhkarViewModel.clearVoiceStatusMessage() }
                         )
                     }
 

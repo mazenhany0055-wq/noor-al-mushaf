@@ -8,7 +8,6 @@ import com.example.data.catalog.AdhkarCatalog
 import com.example.domain.model.AdhkarCategory
 import com.example.domain.model.AdhkarSheikhVoice
 import com.example.domain.model.DhikrItem
-import com.example.domain.model.OfflineTtsVoiceInfo
 import com.example.service.DhikrSpeaker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,13 +16,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class AdhkarUiState(
     val selectedCategory: AdhkarCategory = AdhkarCategory.MORNING,
     val remainingCounts: Map<String, Int> = emptyMap(),
     val speakingDhikrId: String? = null,
     val isAutoPlayingCategory: Boolean = false,
-    val activeSessionLabel: String? = null
+    val activeSessionLabel: String? = null,
+    val voiceStatusMessage: String? = null
 ) {
     val categoryItems: List<DhikrItem>
         get() = AdhkarCatalog.allDhikr.filter { it.category == selectedCategory }
@@ -40,15 +42,9 @@ class AdhkarViewModel(application: Application) : AndroidViewModel(application) 
     private val _uiState = MutableStateFlow(AdhkarUiState())
     val uiState: StateFlow<AdhkarUiState> = _uiState.asStateFlow()
 
-    val availableSystemVoices: StateFlow<List<OfflineTtsVoiceInfo>> = speaker.availableSystemVoices
-
-    init {
-        speaker.warmUp()
-    }
-
     fun selectCategory(category: AdhkarCategory) {
         stopSpeaking()
-        _uiState.update { it.copy(selectedCategory = category) }
+        _uiState.update { it.copy(selectedCategory = category, voiceStatusMessage = null) }
     }
 
     fun decrementDhikr(item: DhikrItem) {
@@ -76,22 +72,38 @@ class AdhkarViewModel(application: Application) : AndroidViewModel(application) 
         stopSpeaking()
         if (wasSame) return
 
-        _uiState.update { it.copy(speakingDhikrId = item.id, isAutoPlayingCategory = false) }
+        _uiState.update {
+            it.copy(
+                speakingDhikrId = item.id,
+                isAutoPlayingCategory = false,
+                voiceStatusMessage = null
+            )
+        }
         speaker.playDhikrItem(
             item = item,
             voiceId = voiceId,
             quranReciterId = quranReciterId,
             chimeBefore = chimeBefore,
-            useMediaUsage = true
-        ) {
-            _uiState.update { cur ->
-                if (cur.speakingDhikrId == item.id && !cur.isAutoPlayingCategory) {
-                    cur.copy(speakingDhikrId = null)
-                } else {
-                    cur
+            useMediaUsage = true,
+            onUnavailable = { reason ->
+                _uiState.update {
+                    it.copy(
+                        speakingDhikrId = null,
+                        isAutoPlayingCategory = false,
+                        voiceStatusMessage = reason
+                    )
+                }
+            },
+            onFinished = {
+                _uiState.update { cur ->
+                    if (cur.speakingDhikrId == item.id && !cur.isAutoPlayingCategory) {
+                        cur.copy(speakingDhikrId = null)
+                    } else {
+                        cur
+                    }
                 }
             }
-        }
+        )
     }
 
     fun toggleAutoPlayCategory(
@@ -108,41 +120,64 @@ class AdhkarViewModel(application: Application) : AndroidViewModel(application) 
         if (items.isEmpty()) return
 
         stopSpeaking()
-        _uiState.update { it.copy(isAutoPlayingCategory = true) }
+        _uiState.update { it.copy(isAutoPlayingCategory = true, voiceStatusMessage = null) }
 
         autoPlayJob = viewModelScope.launch {
+            var playedAny = false
+            var lastUnavailableReason: String? = null
             for (item in items) {
                 if (!_uiState.value.isAutoPlayingCategory) break
                 _uiState.update { it.copy(speakingDhikrId = item.id) }
-                kotlinx.coroutines.withTimeoutOrNull(45_000L) {
-                    kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+                val playedThis = withTimeoutOrNull(45_000L) {
+                    suspendCancellableCoroutine<Boolean> { cont ->
                         speaker.playDhikrItem(
                             item = item,
                             voiceId = voiceId,
                             quranReciterId = quranReciterId,
                             chimeBefore = chimeBefore,
-                            useMediaUsage = true
-                        ) {
-                            if (cont.isActive) {
-                                cont.resumeWith(Result.success(Unit))
+                            useMediaUsage = true,
+                            onUnavailable = { reason ->
+                                lastUnavailableReason = reason
+                                if (cont.isActive) cont.resumeWith(Result.success(false))
+                            },
+                            onFinished = {
+                                if (cont.isActive) cont.resumeWith(Result.success(true))
                             }
-                        }
+                        )
                         cont.invokeOnCancellation {
                             speaker.stop()
                         }
                     }
+                } ?: false
+
+                if (playedThis) {
+                    playedAny = true
+                    delay(450L)
                 }
-                delay(450L)
             }
-            _uiState.update { it.copy(speakingDhikrId = null, isAutoPlayingCategory = false) }
+            _uiState.update {
+                it.copy(
+                    speakingDhikrId = null,
+                    isAutoPlayingCategory = false,
+                    voiceStatusMessage = if (!playedAny) {
+                        lastUnavailableReason ?: "غير متوفر: لا توجد تسجيلات صوتية حقيقية متاحة لهذا القسم بصوت الشيخ المختار"
+                    } else {
+                        it.voiceStatusMessage
+                    }
+                )
+            }
         }
     }
 
     fun previewVoice(voiceId: String, chimeBefore: Boolean) {
         stopSpeaking()
+        _uiState.update { it.copy(voiceStatusMessage = null) }
         speaker.previewSheikhVoice(
             sheikh = AdhkarSheikhVoice.fromId(voiceId),
-            chimeBefore = chimeBefore
+            chimeBefore = chimeBefore,
+            onUnavailable = { reason ->
+                _uiState.update { it.copy(voiceStatusMessage = reason) }
+            }
         )
     }
 
@@ -153,13 +188,25 @@ class AdhkarViewModel(application: Application) : AndroidViewModel(application) 
             return true
         }
         stopSpeaking()
-        val started = speaker.playSheikhSession(sheikh, isMorning) {
-            _uiState.update { it.copy(activeSessionLabel = null) }
-        }
+        _uiState.update { it.copy(voiceStatusMessage = null) }
+        val started = speaker.playSheikhSession(
+            sheikh = sheikh,
+            isMorning = isMorning,
+            onUnavailable = { reason ->
+                _uiState.update { it.copy(activeSessionLabel = null, voiceStatusMessage = reason) }
+            },
+            onFinished = {
+                _uiState.update { it.copy(activeSessionLabel = null) }
+            }
+        )
         if (started) {
             _uiState.update { it.copy(activeSessionLabel = label) }
         }
         return started
+    }
+
+    fun clearVoiceStatusMessage() {
+        _uiState.update { it.copy(voiceStatusMessage = null) }
     }
 
     fun stopSpeaking() {

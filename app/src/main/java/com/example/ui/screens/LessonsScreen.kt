@@ -19,30 +19,27 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -52,7 +49,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -64,7 +60,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.catalog.ScholarCatalog
 import com.example.data.repository.LessonsRepository
-import com.example.domain.model.LessonMediaType
 import com.example.domain.model.LessonScholar
 import com.example.domain.model.ReligiousLesson
 import com.example.domain.prayer.PrayerTimeCalculator
@@ -75,29 +70,21 @@ import com.example.ui.viewmodel.LessonsUiState
 fun LessonsScreen(
     uiState: LessonsUiState,
     displayedLessons: List<ReligiousLesson>,
-    offlineLessonFiles: Map<String, String>,
-    downloadProgress: Map<String, Float>,
-    totalOfflineBytes: Long,
+    favoriteVideoIds: Set<String>,
     onSelectScholar: (LessonScholar) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onSubmitSearch: () -> Unit,
     onRefreshLessons: () -> Unit,
-    onToggleOfflineOnly: (Boolean) -> Unit,
-    onSelectMediaFilter: (LessonMediaType?) -> Unit,
+    onToggleFavoritesOnly: (Boolean) -> Unit,
+    onToggleFavorite: (String) -> Unit,
     onOpenLesson: (ReligiousLesson) -> Unit,
-    onDownloadLesson: (ReligiousLesson) -> Unit,
-    onDeleteDownloadedLesson: (String) -> Unit,
-    onTogglePlayerAudioOnly: () -> Unit,
+    onBrokenVideoDetected: (ReligiousLesson, String) -> Unit,
     onClosePlayer: () -> Unit,
     onDismissStatusBanner: () -> Unit
 ) {
     val selectedScholar = remember(uiState.selectedScholarId) {
         ScholarCatalog.scholars.find { it.id == uiState.selectedScholarId }
             ?: ScholarCatalog.scholars.first()
-    }
-    val offlineCount = offlineLessonFiles.size
-    val offlineSizeLabel = remember(totalOfflineBytes) {
-        LessonsRepository.formatSizeMb(totalOfflineBytes)
     }
 
     Box(
@@ -111,7 +98,7 @@ fun LessonsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header Card with Auto-Sync Status & Offline Storage Counter
+            // Header Card showing Verified YouTube Official Channels status
             item {
                 Card(
                     shape = RoundedCornerShape(22.dp),
@@ -131,55 +118,53 @@ fun LessonsScreen(
                             )
                             .padding(18.dp)
                     ) {
-                        Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.OndemandVideo,
-                                        contentDescription = null,
-                                        tint = Color(0xFFE3BE64),
-                                        modifier = Modifier.size(30.dp)
+                                Icon(
+                                    imageVector = Icons.Default.OndemandVideo,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE3BE64),
+                                    modifier = Modifier.size(30.dp)
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "دروس دين (فيديو يوتيوب رسمي HD)",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
                                     )
-                                    Spacer(Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = "دروس دين (فيديو وصوت)",
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                        Text(
-                                            text = "تحديث تلقائي • محفوظ بدون نت: ${PrayerTimeCalculator.toArabicDigits(offlineCount)}${if (offlineSizeLabel.isNotBlank()) " ($offlineSizeLabel)" else ""}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color(0xFFD6EAE2)
-                                        )
-                                    }
+                                    Text(
+                                        text = "قنوات الشيوخ الرسمية بالصوت والصورة الحقيقية • تحديث تلقائي",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFD6EAE2)
+                                    )
                                 }
+                            }
 
-                                IconButton(
-                                    onClick = onRefreshLessons,
-                                    modifier = Modifier.testTag("refresh_lessons_button")
-                                ) {
-                                    if (uiState.isSyncing) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(22.dp),
-                                            strokeWidth = 2.5.dp,
-                                            color = Color(0xFFE3BE64)
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.Refresh,
-                                            contentDescription = "تحديث وجلب أحدث الدروس",
-                                            tint = Color.White
-                                        )
-                                    }
+                            IconButton(
+                                onClick = onRefreshLessons,
+                                modifier = Modifier.testTag("refresh_lessons_button")
+                            ) {
+                                if (uiState.isSyncing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        strokeWidth = 2.5.dp,
+                                        color = Color(0xFFE3BE64)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "تحديث وجلب أحدث الدروس",
+                                        tint = Color.White
+                                    )
                                 }
                             }
                         }
@@ -187,7 +172,6 @@ fun LessonsScreen(
                 }
             }
 
-            // Status / Feedback Banner
             if (uiState.statusBanner != null) {
                 item {
                     Surface(
@@ -216,7 +200,7 @@ fun LessonsScreen(
                 }
             }
 
-            // Live Auto Search for any Sheikh or Topic
+            // Search bar
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -227,7 +211,7 @@ fun LessonsScreen(
                         value = uiState.searchQuery,
                         onValueChange = onSearchQueryChange,
                         placeholder = {
-                            Text("ابحث باسم أي شيخ أو درس (الشعراوي، الحصري، سمير مصطفى...)")
+                            Text("ابحث باسم الشيخ أو عنوان الدرس...")
                         },
                         leadingIcon = {
                             Icon(Icons.Default.Search, contentDescription = null)
@@ -252,7 +236,7 @@ fun LessonsScreen(
                 }
             }
 
-            // Scholar Chips Carousel
+            // Scholars horizontal carousel
             item {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -283,7 +267,7 @@ fun LessonsScreen(
                 }
             }
 
-            // Selected Scholar Banner + Offline / Type Filters
+            // Active scholar info + All / Favorites chips
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (uiState.searchQuery.isBlank()) {
@@ -315,72 +299,50 @@ fun LessonsScreen(
                                     color = MaterialTheme.colorScheme.primaryContainer,
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    Text(
-                                        text = selectedScholar.categoryTag,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Verified,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            text = selectedScholar.categoryTag,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        item {
-                            FilterChip(
-                                selected = !uiState.showOfflineOnly && uiState.mediaFilter == null,
-                                onClick = {
-                                    onToggleOfflineOnly(false)
-                                    onSelectMediaFilter(null)
-                                },
-                                label = { Text("الكل") }
-                            )
-                        }
-                        item {
-                            FilterChip(
-                                selected = uiState.mediaFilter == LessonMediaType.VIDEO,
-                                onClick = {
-                                    onSelectMediaFilter(
-                                        if (uiState.mediaFilter == LessonMediaType.VIDEO) null else LessonMediaType.VIDEO
-                                    )
-                                },
-                                label = { Text("فيديو (صوت وصورة)") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.OndemandVideo, contentDescription = null, modifier = Modifier.size(16.dp))
-                                }
-                            )
-                        }
-                        item {
-                            FilterChip(
-                                selected = uiState.mediaFilter == LessonMediaType.AUDIO,
-                                onClick = {
-                                    onSelectMediaFilter(
-                                        if (uiState.mediaFilter == LessonMediaType.AUDIO) null else LessonMediaType.AUDIO
-                                    )
-                                },
-                                label = { Text("دروس صوتية") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Headphones, contentDescription = null, modifier = Modifier.size(16.dp))
-                                }
-                            )
-                        }
-                        item {
-                            FilterChip(
-                                selected = uiState.showOfflineOnly,
-                                onClick = { onToggleOfflineOnly(!uiState.showOfflineOnly) },
-                                label = { Text("المحفوظة بدون نت (${PrayerTimeCalculator.toArabicDigits(offlineCount)})") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.CloudDone, contentDescription = null, modifier = Modifier.size(16.dp))
-                                },
-                                modifier = Modifier.testTag("filter_offline_lessons_chip")
-                            )
-                        }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !uiState.showFavoritesOnly,
+                            onClick = { onToggleFavoritesOnly(false) },
+                            label = { Text("كل الفيديوهات الرسمية") }
+                        )
+                        FilterChip(
+                            selected = uiState.showFavoritesOnly,
+                            onClick = { onToggleFavoritesOnly(!uiState.showFavoritesOnly) },
+                            label = {
+                                Text("المفضلة (${PrayerTimeCalculator.toArabicDigits(favoriteVideoIds.size)})")
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Bookmark, contentDescription = null, modifier = Modifier.size(16.dp))
+                            },
+                            modifier = Modifier.testTag("filter_favorite_lessons_chip")
+                        )
                     }
                 }
             }
 
-            // Empty State
+            // Empty / Loading State
             if (displayedLessons.isEmpty() && !uiState.isSyncing) {
                 item {
                     Card(
@@ -402,76 +364,59 @@ fun LessonsScreen(
                                 modifier = Modifier.size(44.dp)
                             )
                             Text(
-                                text = if (uiState.showOfflineOnly) {
-                                    "لا توجد دروس محفوظة بدون نت بعد"
+                                text = if (uiState.showFavoritesOnly) {
+                                    "لا توجد دروس في المفضلة بعد"
                                 } else {
-                                    "اضغط تحديث لجلب دروس ${selectedScholar.arabicName}"
+                                    "جلب أحدث فيديوهات ${selectedScholar.arabicName}"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (uiState.showOfflineOnly) {
-                                    "اضغط على زر التحميل بجانب أي فيديو أو درس لمشاهدته لاحقاً بدون إنترنت."
-                                } else {
-                                    "التطبيق يبحث تلقائياً في المكتبات الإسلامية المفتوحة عن أحدث الفيديوهات والدروس."
-                                },
+                                text = "يتم عرض الفيديوهات الرسمية الموثقة فقط التي يظهر فيها الشيخ بالصوت والصورة الحقيقية.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Button(onClick = onRefreshLessons) {
                                 Icon(Icons.Default.Refresh, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text("تحديث الدروس الآن")
+                                Text("تحديث من القنوات الرسمية")
                             }
                         }
                     }
                 }
             }
 
-            // Lessons List
-            items(displayedLessons, key = { it.id }) { lesson ->
-                val sanitizedId = lesson.id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-                val isOffline = offlineLessonFiles.containsKey(sanitizedId)
-                val progress = downloadProgress[lesson.id]
-
-                LessonItemCard(
+            items(displayedLessons, key = { it.youtubeVideoId }) { lesson ->
+                val isFav = favoriteVideoIds.contains(lesson.youtubeVideoId)
+                OfficialYouTubeLessonCard(
                     lesson = lesson,
-                    isOffline = isOffline,
-                    downloadProgress = progress,
+                    isFavorite = isFav,
                     onPlay = { onOpenLesson(lesson) },
-                    onDownload = { onDownloadLesson(lesson) },
-                    onDeleteOffline = { onDeleteDownloadedLesson(lesson.id) }
+                    onToggleFavorite = { onToggleFavorite(lesson.youtubeVideoId) }
                 )
             }
         }
     }
 
     val active = uiState.activeLesson
-    val playable = uiState.activePlayableUri
-    if (active != null && playable != null) {
-        val sanitized = active.id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+    if (active != null) {
         LessonPlayerDialog(
             lesson = active,
-            playableUri = playable,
-            isAudioOnly = uiState.audioOnlyInPlayer,
-            isDownloadedOffline = offlineLessonFiles.containsKey(sanitized),
-            downloadProgress = downloadProgress[active.id],
-            onToggleAudioOnly = onTogglePlayerAudioOnly,
-            onDownloadOffline = { onDownloadLesson(active) },
+            isFavorite = favoriteVideoIds.contains(active.youtubeVideoId),
+            onToggleFavorite = { onToggleFavorite(active.youtubeVideoId) },
+            onBrokenVideoDetected = onBrokenVideoDetected,
             onClose = onClosePlayer
         )
     }
 }
 
 @Composable
-private fun LessonItemCard(
+private fun OfficialYouTubeLessonCard(
     lesson: ReligiousLesson,
-    isOffline: Boolean,
-    downloadProgress: Float?,
+    isFavorite: Boolean,
     onPlay: () -> Unit,
-    onDownload: () -> Unit,
-    onDeleteOffline: () -> Unit
+    onToggleFavorite: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(18.dp),
@@ -479,48 +424,36 @@ private fun LessonItemCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onPlay() }
-            .testTag("lesson_card_${lesson.id}")
+            .testTag("lesson_card_${lesson.youtubeVideoId}")
     ) {
         Column {
-            // Thumbnail Banner + Play Overlay
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(16f / 8.5f)
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color(0xFF0B3529),
-                                Color(0xFF195745)
-                            )
-                        )
-                    )
+                    .aspectRatio(16f / 9f)
+                    .background(Color(0xFF0B3529))
             ) {
-                if (!lesson.thumbnailUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = lesson.thumbnailUrl,
-                        contentDescription = lesson.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0x55000000))
-                    )
-                }
+                AsyncImage(
+                    model = lesson.thumbnailUrl,
+                    contentDescription = lesson.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x44000000))
+                )
 
-                // Center Play Icon
                 Icon(
                     imageVector = Icons.Default.PlayCircleFilled,
-                    contentDescription = "تشغيل الدرس",
+                    contentDescription = "مشاهدة الفيديو بالصوت والصورة",
                     tint = Color.White.copy(alpha = 0.94f),
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(58.dp)
                         .align(Alignment.Center)
                 )
 
-                // Top Badges Row
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -547,55 +480,37 @@ private fun LessonItemCard(
                         color = Color(0xCC06281F),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text(
-                            text = lesson.mediaType.arabicLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-
-                    if (isOffline) {
-                        Surface(
-                            color = Color(0xDD1B6E4F),
-                            shape = RoundedCornerShape(8.dp)
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.CloudDone,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = "بدون نت",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White
-                                )
-                            }
+                            Icon(
+                                Icons.Default.Verified,
+                                contentDescription = null,
+                                tint = Color(0xFFE3BE64),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "قناة رسمية • صوت وصورة HD",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White
+                            )
                         }
                     }
                 }
 
                 val durationLabel = LessonsRepository.formatDuration(lesson.durationSeconds)
-                val sizeLabel = LessonsRepository.formatSizeMb(lesson.fileSizeBytes)
-                if (durationLabel.isNotBlank() || sizeLabel.isNotBlank()) {
+                if (durationLabel.isNotBlank()) {
                     Surface(
-                        color = Color(0xB3000000),
+                        color = Color(0xC0000000),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .padding(10.dp)
                     ) {
                         Text(
-                            text = listOfNotNull(
-                                durationLabel.takeIf { it.isNotBlank() },
-                                sizeLabel.takeIf { it.isNotBlank() }
-                            ).joinToString(" • "),
+                            text = durationLabel,
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -614,9 +529,19 @@ private fun LessonItemCard(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "${lesson.scholarName}${if (lesson.publishedDateLabel.isNotBlank()) " • ${lesson.publishedDateLabel}" else ""}",
+                    text = buildString {
+                        append(lesson.scholarName)
+                        if (lesson.channelTitle.isNotBlank() && lesson.channelTitle != lesson.scholarName) {
+                            append(" • ${lesson.channelTitle}")
+                        }
+                        if (lesson.publishedDateLabel.isNotBlank()) {
+                            append(" • ${lesson.publishedDateLabel}")
+                        }
+                    },
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
 
                 Spacer(Modifier.height(10.dp))
@@ -630,51 +555,23 @@ private fun LessonItemCard(
                         onClick = onPlay,
                         modifier = Modifier
                             .weight(1f)
-                            .testTag("play_lesson_${lesson.id}")
+                            .testTag("play_lesson_${lesson.youtubeVideoId}")
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(if (lesson.mediaType == LessonMediaType.VIDEO) "مشاهدة الآن" else "استماع الآن")
+                        Text("مشاهدة بالصوت والصورة HD")
                     }
 
-                    if (isOffline) {
-                        IconButton(
-                            onClick = onDeleteOffline,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .testTag("delete_lesson_${lesson.id}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteOutline,
-                                contentDescription = "حذف النسخة المحفوظة",
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    } else {
-                        FilledTonalButton(
-                            onClick = onDownload,
-                            enabled = downloadProgress == null,
-                            modifier = Modifier.testTag("download_lesson_${lesson.id}")
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                if (downloadProgress != null) {
-                                    "${(downloadProgress * 100).toInt()}%"
-                                } else {
-                                    "بدون نت"
-                                }
-                            )
-                        }
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        modifier = Modifier.testTag("favorite_lesson_${lesson.youtubeVideoId}")
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            contentDescription = if (isFavorite) "إزالة من المفضلة" else "حفظ في المفضلة",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
-                }
-
-                if (downloadProgress != null) {
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { downloadProgress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
                 }
             }
         }

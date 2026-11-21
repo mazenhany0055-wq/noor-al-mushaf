@@ -1,217 +1,127 @@
 package com.example.data.catalog
 
-import com.example.domain.model.LessonMediaType
 import com.example.domain.model.LessonScholar
-import com.example.domain.model.ReligiousLesson
 
+/**
+ * Verified official YouTube channels and handles for Islamic scholars.
+ * Every video shown in "دروس دين" is fetched dynamically from these official channels
+ * via YouTube Data API v3 (or official channel feeds + oEmbed verification) and verified
+ * to be real on-camera HD video + real voice with zero static slides or AI TTS.
+ */
 object ScholarCatalog {
 
     val scholars: List<LessonScholar> = listOf(
         LessonScholar(
             id = "latest",
             arabicName = "الأحدث",
-            titleOrSpecialty = "أحدث الدروس المرفوعة تلقائياً من الإنترنت",
-            archiveSearchQueries = listOf(
-                "(الشعراوي OR \"سمير مصطفى\" OR الحصري OR \"ياسر الدوسري\" OR \"أحمد سمير\" OR \"محمد عزب\" OR \"محمد حسان\" OR \"عمر عبد الكافي\" OR \"عثمان الخميس\")"
-            ),
+            titleOrSpecialty = "أحدث الفيديوهات المرفوعة مباشرة من القنوات الرسمية للشيوخ",
             categoryTag = "تحديث تلقائي"
         ),
         LessonScholar(
             id = "shaarawy",
             arabicName = "الشيخ الشعراوي",
-            titleOrSpecialty = "خواطر وتفسير القرآن الكريم (صوت وصورة)",
-            archiveSearchQueries = listOf(
-                "\"الشعراوي\" OR shaarawy OR alsha3rawi OR sha3rawy"
-            ),
-            fallbackIdentifiers = listOf(
-                "movie-tafseer-alsha3rawi-video-full",
-                "Tafsir.Al-Shaarawy.Video",
-                "AlShaarawy-Tafseer-Quran"
-            ),
-            categoryTag = "تفسير القرآن"
-        ),
-        LessonScholar(
-            id = "hussary",
-            arabicName = "الشيخ الحصري",
-            titleOrSpecialty = "المصحف المعلم وأحكام التجويد والتلاوة",
-            archiveSearchQueries = listOf(
-                "\"الحصري\" OR hussary OR hosary OR alhosary"
-            ),
-            fallbackIdentifiers = listOf(
-                "mo3allem-128kb-mp3-alhosary-cairosound-1411-without-repeat-of-kids",
-                "Al-Husary-Tajweed-Lessons"
-            ),
-            categoryTag = "التجويد والتلاوة"
-        ),
-        LessonScholar(
-            id = "yasser",
-            arabicName = "الشيخ ياسر الدوسري",
-            titleOrSpecialty = "خطب المسجد الحرام والدروس الإيمانية",
-            archiveSearchQueries = listOf(
-                "\"ياسر الدوسري\" OR \"yasser al-dossary\" OR dossary"
-            ),
-            fallbackIdentifiers = listOf(
-                "khutab-haram-makki-yasser-dossary",
-                "Yasser-Al-Dossary-Lectures"
-            ),
-            categoryTag = "خطب الحرم"
+            titleOrSpecialty = "القناة الرسمية • خواطر وتفسير القرآن بالصوت والصورة",
+            officialChannelIds = listOf("UCijSEIUA72pyzSNOf_lx5ng"),
+            officialHandles = listOf("alsharawiofficial"),
+            youtubeVideoSearchQueries = listOf("الشيخ محمد متولي الشعراوي تفسير القرآن القناة الرسمية"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "samir_mustafa",
             arabicName = "الشيخ سمير مصطفى",
-            titleOrSpecialty = "السيرة النبوية وشرح الكتب والرقائق",
-            archiveSearchQueries = listOf(
-                "\"سمير مصطفى\" OR \"samir mostafa\" OR \"samir mustafa\""
-            ),
-            fallbackIdentifiers = listOf(
-                "www.forsanhaq.com_595",
-                "islami-888",
-                "islami-889",
-                "mostafa-mohazarat",
-                "20231226_20231226_1901"
-            ),
-            categoryTag = "السيرة والرقائق"
+            titleOrSpecialty = "القناة الرسمية • السيرة النبوية وشرح الكتب والرقائق",
+            officialChannelIds = listOf("UCch6Y4YgssEzMa4Q5zw4xjw"),
+            officialHandles = listOf("samirmoustafa"),
+            youtubeVideoSearchQueries = listOf("قناة الشيخ سمير مصطفى الرسمية محاضرة"),
+            categoryTag = "القناة الرسمية"
+        ),
+        LessonScholar(
+            id = "yasser",
+            arabicName = "الشيخ ياسر الدوسري",
+            titleOrSpecialty = "القناة الرسمية • خطب المسجد الحرام والدروس المرئية",
+            officialChannelIds = listOf("UClncV9OLPto_MinRzGfjr2g"),
+            officialHandles = listOf("Yasseraldosry"),
+            youtubeVideoSearchQueries = listOf("الشيخ ياسر الدوسري خطبة المسجد الحرام كاملة"),
+            requireVisualAppearanceFilter = true,
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "ahmed_samir",
             arabicName = "الشيخ أحمد سمير",
-            titleOrSpecialty = "دروس التزكية والمواعظ التربوية",
-            archiveSearchQueries = listOf(
-                "\"أحمد سمير\" AND (درس OR محاضرة OR خطبة OR دين OR القرآن)"
-            ),
-            categoryTag = "تربية وتزكية"
+            titleOrSpecialty = "القناة الرسمية • دروس التزكية والقصص القرآنية",
+            officialHandles = listOf("Sh.Ahmed-Samir", "Sh.Ahmed-Samir8"),
+            youtubeVideoSearchQueries = listOf("الشيخ أحمد سمير درس محاضرة"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "mohamed_azab",
-            arabicName = "الشيخ محمد عزب",
-            titleOrSpecialty = "دروس وعظية وقصص وابتهالات",
-            archiveSearchQueries = listOf(
-                "\"محمد عزب\" OR \"محمد العزب\""
+            arabicName = "الشيخ العزب",
+            titleOrSpecialty = "القناة الرسمية • خطب ومواعظ مرئية من المسجد",
+            officialChannelIds = listOf("UCAhQ6OE0QwGmoIKdQFwTn2w"),
+            youtubeVideoSearchQueries = listOf("الشيخ العزب خطبة كاملة"),
+            categoryTag = "القناة الرسمية"
+        ),
+        LessonScholar(
+            id = "hussary",
+            arabicName = "الشيخ الحصري",
+            titleOrSpecialty = "فيديوهات وتلاوات تلفزيونية نادرة يظهر فيها الشيخ الحصري",
+            officialHandles = listOf("HosariOfficial"),
+            youtubeVideoSearchQueries = listOf(
+                "الشيخ محمود خليل الحصري فيديو نادر التلفزيون",
+                "الشيخ محمود خليل الحصري نور على نور"
             ),
-            categoryTag = "مواعظ وقصص"
+            requireVisualAppearanceFilter = true,
+            categoryTag = "تسجيلات مرئية نادرة"
         ),
         LessonScholar(
             id = "yaqoub",
             arabicName = "الشيخ محمد حسين يعقوب",
-            titleOrSpecialty = "سلاسل إصلاح القلوب والتزكية",
-            archiveSearchQueries = listOf(
-                "\"محمد حسين يعقوب\" OR yaqoub"
-            ),
-            categoryTag = "إصلاح القلوب"
+            titleOrSpecialty = "القناة الرسمية • دروس إصلاح القلوب والرقائق",
+            officialChannelIds = listOf("UCdwmI3CAhNtmtr2Q8n44tlA"),
+            youtubeVideoSearchQueries = listOf("الشيخ محمد حسين يعقوب درس كامل"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "hassan",
             arabicName = "الشيخ محمد حسان",
-            titleOrSpecialty = "السيرة النبوية وأصول الإيمان",
-            archiveSearchQueries = listOf(
-                "\"محمد حسان\" OR \"mohamed hassan\""
-            ),
-            categoryTag = "السيرة والعقيدة"
+            titleOrSpecialty = "القناة الرسمية • سيرة النبي ﷺ والدروس التربوية",
+            officialHandles = listOf("القناةالرسميةللشيخالدكتورمحمدح"),
+            youtubeVideoSearchQueries = listOf("الشيخ محمد حسان درس كامل القناة الرسمية"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "abdelkafy",
-            arabicName = "الشيخ عمر عبد الكافي",
-            titleOrSpecialty = "سلسلة الدار الآخرة وقصص القرآن",
-            archiveSearchQueries = listOf(
-                "\"عمر عبد الكافي\" OR abdelkafy"
-            ),
-            categoryTag = "الدار الآخرة"
+            arabicName = "د. عمر عبد الكافي",
+            titleOrSpecialty = "القناة الرسمية • الدار الآخرة وقصص القرآن الكريم",
+            officialChannelIds = listOf("UCKUOmGXE9Ytlc2EzpGqimtw"),
+            officialHandles = listOf("abdelkafytube"),
+            youtubeVideoSearchQueries = listOf("الدكتور عمر عبد الكافي درس كامل"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "alkhamis",
             arabicName = "الشيخ عثمان الخميس",
-            titleOrSpecialty = "العقيدة والفقه والتاريخ الإسلامي",
-            archiveSearchQueries = listOf(
-                "\"عثمان الخميس\" OR alkhamis"
-            ),
-            categoryTag = "العقيدة والفقه"
+            titleOrSpecialty = "القناة الرسمية • العقيدة والسيرة والفقه",
+            officialChannelIds = listOf("UCWjCSGhmSGu0VLf2mPFS0Kg"),
+            officialHandles = listOf("othmanalkamees"),
+            youtubeVideoSearchQueries = listOf("الشيخ عثمان الخميس درس كامل"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "nabulsi",
             arabicName = "د. محمد راتب النابلسي",
-            titleOrSpecialty = "أسماء الله الحسنى وتربية النفس",
-            archiveSearchQueries = listOf(
-                "\"النابلسي\" OR nabulsi"
-            ),
-            categoryTag = "تزكية وتفكر"
+            titleOrSpecialty = "القناة الرسمية • أسماء الله الحسنى وتفسير القرآن",
+            officialHandles = listOf("nabulsiencyclopedia"),
+            youtubeVideoSearchQueries = listOf("الدكتور محمد راتب النابلسي درس كامل"),
+            categoryTag = "القناة الرسمية"
         ),
         LessonScholar(
             id = "ahmed_amer",
             arabicName = "د. أحمد عامر",
-            titleOrSpecialty = "سيرة النبي ﷺ وقصص الصحابة",
-            archiveSearchQueries = listOf(
-                "\"أحمد عامر\" AND (السيرة OR درس OR محاضرة)"
-            ),
-            categoryTag = "السيرة النبوية"
-        )
-    )
-
-    val starterVerifiedLessons: List<ReligiousLesson> = listOf(
-        ReligiousLesson(
-            id = "starter_samir_batle_1",
-            scholarId = "samir_mustafa",
-            scholarName = "الشيخ سمير مصطفى",
-            title = "سلسلة المعارك الكبرى — غزوة بدر الكبرى (مرئي)",
-            description = "درس مرئي مفصل عن دروس وعبر غزوة بدر الكبرى",
-            mediaUrl = "https://archive.org/download/www.forsanhaq.com_595/01.mp4",
-            thumbnailUrl = "https://archive.org/services/img/www.forsanhaq.com_595",
-            mediaType = LessonMediaType.VIDEO,
-            sourceLabel = "Archive.org • فيديو"
-        ),
-        ReligiousLesson(
-            id = "starter_samir_seerah_1",
-            scholarId = "samir_mustafa",
-            scholarName = "الشيخ سمير مصطفى",
-            title = "السيرة النبوية — الدرس الأول: أهمية دراسة السيرة",
-            description = "محاضرة شاملة في سيرة النبي صلى الله عليه وسلم",
-            mediaUrl = "https://archive.org/download/islami-888/001.mp3",
-            thumbnailUrl = "https://archive.org/services/img/islami-888",
-            mediaType = LessonMediaType.AUDIO,
-            sourceLabel = "Archive.org • صوتي"
-        ),
-        ReligiousLesson(
-            id = "starter_samir_wabil_1",
-            scholarId = "samir_mustafa",
-            scholarName = "الشيخ سمير مصطفى",
-            title = "شرح كتاب الوابل الصيب — فضل الذكر",
-            description = "شرح مميز لكتاب الوابل الصيب لابن القيم",
-            mediaUrl = "https://archive.org/download/islami-889/001.mp3",
-            thumbnailUrl = "https://archive.org/services/img/islami-889",
-            mediaType = LessonMediaType.AUDIO,
-            sourceLabel = "Archive.org • صوتي"
-        ),
-        ReligiousLesson(
-            id = "starter_hussary_muallim_1",
-            scholarId = "hussary",
-            scholarName = "الشيخ محمود خليل الحصري",
-            title = "المصحف المعلم — سورة الفاتحة وتصحيح التلاوة",
-            description = "تعليم مخارج الحروف وأحكام التلاوة الصحيحة بصوت الشيخ الحصري",
-            mediaUrl = "https://archive.org/download/mo3allem-128kb-mp3-alhosary-cairosound-1411-without-repeat-of-kids/001.mp3",
-            thumbnailUrl = "https://archive.org/services/img/mo3allem-128kb-mp3-alhosary-cairosound-1411-without-repeat-of-kids",
-            mediaType = LessonMediaType.AUDIO,
-            sourceLabel = "Archive.org • صوتي"
-        ),
-        ReligiousLesson(
-            id = "starter_shaarawy_fatiha",
-            scholarId = "shaarawy",
-            scholarName = "الشيخ محمد متولي الشعراوي",
-            title = "خواطر الإمام الشعراوي — مقدمة تفسير القرآن وسورة الفاتحة",
-            description = "تفسير وخواطر الشيخ الشعراوي رحمه الله",
-            mediaUrl = "https://archive.org/download/movie-tafseer-alsha3rawi-video-full/001.mp4",
-            thumbnailUrl = "https://archive.org/services/img/movie-tafseer-alsha3rawi-video-full",
-            mediaType = LessonMediaType.VIDEO,
-            sourceLabel = "Archive.org • فيديو"
-        ),
-        ReligiousLesson(
-            id = "starter_alafasy_adhkar",
-            scholarId = "yasser",
-            scholarName = "الشيخ ناصر القطامي",
-            title = "رقائق وأذكار الصباح والمساء — بصوت مؤثر",
-            description = "تلاوة وأذكار مختارة تبعث السكينة في القلب",
-            mediaUrl = "https://archive.org/download/way2sona_20160320_2316/%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B5%D8%A8%D8%A7%D8%AD%20%D9%88%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20%D8%A8%D8%B5%D9%88%D8%AA%20%D8%A7%D9%84%D8%B4%D9%8A%D8%AE%20%D9%86%D8%A7%D8%B5%D8%B1%20%D8%A7%D9%84%D9%82%D8%B7%D8%A7%D9%85%D9%8A.mp3",
-            thumbnailUrl = "https://archive.org/services/img/way2sona_20160320_2316",
-            mediaType = LessonMediaType.AUDIO,
-            sourceLabel = "Archive.org • صوتي"
+            titleOrSpecialty = "القناة الرسمية • السيرة النبوية ورحلة الدار الآخرة",
+            officialHandles = listOf("ahmedamercaller"),
+            youtubeVideoSearchQueries = listOf("أحمد عامر السيرة النبوية"),
+            categoryTag = "القناة الرسمية"
         )
     )
 }

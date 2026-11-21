@@ -300,27 +300,3 @@ enum class AdhkarSheikhVoice(
             entries.find { it.id == id } ?: MULTI_SHEIKHS
     }
 }
-
-enum class AdhkarVoicePreset(
-    val id: String,
-    val arabicName: String,
-    val description: String,
-    val pitch: Float,
-    val speechRate: Float
-) {
-    CALM_DEEP("calm_deep", "صوت وقور خاشع", "هادئ ومتوازن • بدون نت", 0.84f, 0.84f),
-    CLEAR_STRONG("clear_strong", "صوت جهوري واضح", "نطق قوي وواضح • بدون نت", 0.96f, 0.92f),
-    SLOW_TEACHING("slow_teaching", "صوت متأنٍّ للترديد", "بطيء ومناسب للحفظ • بدون نت", 0.90f, 0.74f),
-    BRISK_REMINDER("brisk", "صوت سريع مختصر", "مناسب للتنبيهات السريعة • بدون نت", 1.02f, 1.05f);
-
-    companion object {
-        fun fromId(id: String): AdhkarVoicePreset? = entries.find { it.id == id }
-    }
-}
-
-data class OfflineTtsVoiceInfo(
-    val id: String,
-    val rawName: String,
-    val displayName: String,
-    val isOfflineReady: Boolean
-)

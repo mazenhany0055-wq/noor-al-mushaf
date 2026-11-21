@@ -25,7 +25,6 @@ import com.example.domain.model.AdhanVoice
 class AdhanPlaybackService : Service() {
 
     private var mediaPlayer: MediaPlayer? = null
-    private var dhikrSpeaker: DhikrSpeaker? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -44,7 +43,6 @@ class AdhanPlaybackService : Service() {
         val prayerName = intent?.getStringExtra(EXTRA_PRAYER_NAME) ?: "الصلاة"
         val voiceId = intent?.getStringExtra(EXTRA_VOICE_ID) ?: AdhanVoice.MAKKAH.id
         val voice = AdhanVoice.fromId(voiceId)
-        val adhkarVoiceId = intent?.getStringExtra(EXTRA_TTS_VOICE_ID) ?: "calm_deep"
 
         val openAppIntent = PendingIntent.getActivity(
             this,
@@ -82,22 +80,20 @@ class AdhanPlaybackService : Service() {
         acquireWakeLock()
         requestAlarmAudioFocus()
         scheduleSafetyTimeout(MAX_SERVICE_DURATION_MS)
-        playAdhanVoiceOfflineFirst(voice, prayerName, adhkarVoiceId)
+        playAdhanVoiceOfflineFirst(voice)
         return START_NOT_STICKY
     }
 
-    private fun playAdhanVoiceOfflineFirst(
-        voice: AdhanVoice,
-        prayerName: String,
-        ttsVoiceId: String
-    ) {
+    private fun playAdhanVoiceOfflineFirst(voice: AdhanVoice) {
         if (voice == AdhanVoice.SYSTEM_TONE) {
-            playSpokenAdhanOrRingtone(prayerName, ttsVoiceId)
+            playFallbackRingtone()
             return
         }
 
         val offlineRepo = OfflineAudioRepository(this)
         val offlineUri = offlineRepo.getOfflineAdhanUri(voice)
+            ?: offlineRepo.getOfflineAdhanUri(AdhanVoice.MAKKAH)
+
         if (offlineUri != null) {
             releaseAudioResources()
             try {
@@ -115,7 +111,7 @@ class AdhanPlaybackService : Service() {
                     setOnPreparedListener { it.start() }
                     setOnCompletionListener { stopAdhanAndSelf() }
                     setOnErrorListener { _, _, _ ->
-                        playSpokenAdhanOrRingtone(prayerName, ttsVoiceId)
+                        playFallbackRingtone()
                         true
                     }
                     prepareAsync()
@@ -127,18 +123,13 @@ class AdhanPlaybackService : Service() {
         }
 
         if (offlineRepo.isNetworkConnected()) {
-            playAdhanAudio(voice.streamUrl, voice.fallbackUrl, prayerName, ttsVoiceId)
+            playAdhanAudio(voice.streamUrl, voice.fallbackUrl)
         } else {
-            playSpokenAdhanOrRingtone(prayerName, ttsVoiceId)
+            playFallbackRingtone()
         }
     }
 
-    private fun playAdhanAudio(
-        primaryUrl: String?,
-        fallbackUrl: String?,
-        prayerName: String,
-        ttsVoiceId: String
-    ) {
+    private fun playAdhanAudio(primaryUrl: String?, fallbackUrl: String?) {
         releaseAudioResources()
         if (primaryUrl != null) {
             try {
@@ -150,9 +141,9 @@ class AdhanPlaybackService : Service() {
                     setOnCompletionListener { stopAdhanAndSelf() }
                     setOnErrorListener { _, _, _ ->
                         if (fallbackUrl != null) {
-                            playAdhanAudio(fallbackUrl, null, prayerName, ttsVoiceId)
+                            playAdhanAudio(fallbackUrl, null)
                         } else {
-                            playSpokenAdhanOrRingtone(prayerName, ttsVoiceId)
+                            playFallbackRingtone()
                         }
                         true
                     }
@@ -161,30 +152,12 @@ class AdhanPlaybackService : Service() {
                 mediaPlayer = player
             } catch (_: Exception) {
                 if (fallbackUrl != null) {
-                    playAdhanAudio(fallbackUrl, null, prayerName, ttsVoiceId)
+                    playAdhanAudio(fallbackUrl, null)
                 } else {
-                    playSpokenAdhanOrRingtone(prayerName, ttsVoiceId)
+                    playFallbackRingtone()
                 }
             }
         } else {
-            playSpokenAdhanOrRingtone(prayerName, ttsVoiceId)
-        }
-    }
-
-    private fun playSpokenAdhanOrRingtone(prayerName: String, ttsVoiceId: String) {
-        releaseAudioResources()
-        try {
-            val speaker = dhikrSpeaker ?: DhikrSpeaker(applicationContext).also { dhikrSpeaker = it }
-            val adhanPhrase = DhikrSpeaker.buildSpokenAdhanText(prayerName)
-            speaker.speakDhikr(
-                phrase = adhanPhrase,
-                voiceId = ttsVoiceId,
-                chimeBefore = true,
-                audioUsage = AudioAttributes.USAGE_ALARM
-            ) {
-                mainHandler.post { stopAdhanAndSelf() }
-            }
-        } catch (_: Exception) {
             playFallbackRingtone()
         }
     }
@@ -294,10 +267,6 @@ class AdhanPlaybackService : Service() {
         } finally {
             mediaPlayer = null
         }
-        try {
-            dhikrSpeaker?.stop()
-        } catch (_: Exception) {
-        }
     }
 
     private fun stopAdhanAndSelf() {
@@ -312,12 +281,6 @@ class AdhanPlaybackService : Service() {
     override fun onDestroy() {
         mainHandler.removeCallbacks(safetyStopRunnable)
         releaseAudioResources()
-        try {
-            dhikrSpeaker?.release()
-        } catch (_: Exception) {
-        } finally {
-            dhikrSpeaker = null
-        }
         abandonAudioFocus()
         releaseWakeLock()
         super.onDestroy()
@@ -327,7 +290,6 @@ class AdhanPlaybackService : Service() {
         const val ACTION_STOP = "com.example.action.STOP_ADHAN"
         const val EXTRA_PRAYER_NAME = "extra_prayer_name"
         const val EXTRA_VOICE_ID = "extra_voice_id"
-        const val EXTRA_TTS_VOICE_ID = "extra_tts_voice_id"
         private const val NOTIFICATION_ID = 4001
         private const val MAX_SERVICE_DURATION_MS = 5 * 60 * 1000L
         private const val RINGTONE_FALLBACK_MAX_MS = 60 * 1000L

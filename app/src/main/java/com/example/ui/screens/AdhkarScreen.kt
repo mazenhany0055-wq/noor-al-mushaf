@@ -106,7 +106,8 @@ fun AdhkarScreen(
     onDownloadSheikhSession: (AdhkarSheikhVoice, Boolean) -> Unit,
     onSpeakSingleDhikr: (DhikrItem) -> Unit,
     onToggleAutoPlayAll: () -> Unit,
-    onStopSpeaking: () -> Unit
+    onStopSpeaking: () -> Unit,
+    onDismissVoiceStatus: () -> Unit
 ) {
     val context = LocalContext.current
     var showVoicePickerDialog by remember { mutableStateOf(false) }
@@ -170,7 +171,7 @@ fun AdhkarScreen(
                                 )
                                 Text(
                                     text = if (selectedSheikh == AdhkarSheikhVoice.MULTI_SHEIKHS) {
-                                        "${selectedSheikh.arabicName} • بدون أصوات آلية"
+                                        "${selectedSheikh.arabicName} • تسجيلات حقيقية 100%"
                                     } else {
                                         "${selectedSheikh.arabicName} • الآيات: $selectedQuranReciterName"
                                     },
@@ -266,6 +267,51 @@ fun AdhkarScreen(
                                         },
                                         onDownload = { onDownloadSheikhSession(selectedSheikh, false) }
                                     )
+                                }
+                            }
+                        } else if (selectedSheikh != AdhkarSheikhVoice.MULTI_SHEIKHS &&
+                            selectedSheikh != AdhkarSheikhVoice.HAMAD_AL_DURAYHIM
+                        ) {
+                            Spacer(Modifier.height(10.dp))
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "جلسة الصباح والمساء الكاملة بصوت ${selectedSheikh.arabicName}: غير متوفر — متاح تلاوة الآيات والأدعية القرآنية بصوته",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                        }
+
+                        if (!adhkarState.voiceStatusMessage.isNullOrBlank()) {
+                            Spacer(Modifier.height(10.dp))
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("adhkar_unavailable_banner")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = adhkarState.voiceStatusMessage,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = onDismissVoiceStatus) {
+                                        Text("حسناً")
+                                    }
                                 }
                             }
                         }

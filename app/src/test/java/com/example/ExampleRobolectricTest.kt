@@ -3,6 +3,10 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -28,11 +32,13 @@ class ExampleRobolectricTest {
     val quranVm = factory.create(com.example.ui.viewmodel.QuranViewModel::class.java)
     val tasbihVm = factory.create(com.example.ui.viewmodel.TasbihViewModel::class.java)
     val adhkarVm = factory.create(com.example.ui.viewmodel.AdhkarViewModel::class.java)
+    val lessonsVm = factory.create(com.example.ui.viewmodel.LessonsViewModel::class.java)
 
-    org.junit.Assert.assertNotNull(mainVm)
-    org.junit.Assert.assertNotNull(quranVm)
-    org.junit.Assert.assertNotNull(tasbihVm)
-    org.junit.Assert.assertNotNull(adhkarVm)
+    assertNotNull(mainVm)
+    assertNotNull(quranVm)
+    assertNotNull(tasbihVm)
+    assertNotNull(adhkarVm)
+    assertNotNull(lessonsVm)
 
     // Verify triggering Quran playback and Adhan preview does not throw IllegalArgumentException
     mainVm.audioManager.playSurah(1, "yasser")
@@ -43,80 +49,153 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `verify adhkar periodic modes and real sheikh voices`() {
-    org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_AND_NOTIFICATION.includesVoice)
-    org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_AND_NOTIFICATION.includesNotification)
-    org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_ONLY.includesVoice)
-    org.junit.Assert.assertFalse(com.example.domain.model.PeriodicDhikrMode.VOICE_ONLY.includesNotification)
-    org.junit.Assert.assertFalse(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesVoice)
-    org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesNotification)
+  fun `verify adhkar strict real sheikh audio and unavailable callback without TTS`() {
+    assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_AND_NOTIFICATION.includesVoice)
+    assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_AND_NOTIFICATION.includesNotification)
+    assertTrue(com.example.domain.model.PeriodicDhikrMode.VOICE_ONLY.includesVoice)
+    assertFalse(com.example.domain.model.PeriodicDhikrMode.VOICE_ONLY.includesNotification)
+    assertFalse(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesVoice)
+    assertTrue(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesNotification)
 
     val defaultSettings = com.example.data.preferences.UserSettings()
     assertEquals("sheikh_multi", defaultSettings.adhkarVoiceId)
     assertEquals("afs", defaultSettings.adhkarQuranReciterId)
 
-    org.junit.Assert.assertEquals(
+    assertEquals(
       com.example.domain.model.AdhkarSheikhVoice.ALAFASY,
       com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_alafasy")
     )
-    org.junit.Assert.assertEquals(
+    assertEquals(
       com.example.domain.model.AdhkarSheikhVoice.NASSER_ALQATAMI,
       com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_qatami")
     )
-    org.junit.Assert.assertEquals(
+    assertEquals(
       com.example.domain.model.AdhkarSheikhVoice.HUSSARY,
       com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_hussary")
     )
-    org.junit.Assert.assertEquals(
+    assertEquals(
       com.example.domain.model.AdhkarSheikhVoice.MULTI_SHEIKHS,
       com.example.domain.model.AdhkarSheikhVoice.fromId("unknown_id")
     )
 
     val app = ApplicationProvider.getApplicationContext<android.app.Application>()
     val offlineRepo = com.example.data.repository.OfflineAudioRepository(app)
-    org.junit.Assert.assertNull(offlineRepo.getOfflineDhikrClipUri("m2"))
-    org.junit.Assert.assertNull(offlineRepo.getOfflinePeriodicDhikrUri(0))
+    assertNull(offlineRepo.getOfflineDhikrClipUri("m2"))
+    assertNull(offlineRepo.getOfflinePeriodicDhikrUri(0))
+
+    // Selecting a Quran-only Sheikh on a non-Quranic Hisn item MUST report "غير متوفر" instead of faking TTS
+    val speaker = com.example.service.DhikrSpeaker(app, offlineRepo)
+    var unavailableMsg: String? = null
+    val nonQuranDhikr = com.example.domain.model.DhikrItem(
+      id = "test_hisn",
+      category = com.example.domain.model.AdhkarCategory.MORNING,
+      text = "سبحان الله وبحمده",
+      targetCount = 100,
+      virtueOrSource = "مسلم"
+    )
+    speaker.playDhikrItem(
+      item = nonQuranDhikr,
+      voiceId = com.example.domain.model.AdhkarSheikhVoice.HUSSARY.id,
+      quranReciterId = "husr",
+      chimeBefore = false,
+      onUnavailable = { unavailableMsg = it }
+    )
+    assertNotNull(unavailableMsg)
+    assertTrue(unavailableMsg!!.contains("غير متوفر"))
 
     val factory = androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(app)
     val adhkarVm = factory.create(com.example.ui.viewmodel.AdhkarViewModel::class.java)
-    adhkarVm.previewVoice("sheikh_multi", false)
-    adhkarVm.previewVoice("sheikh_alafasy", false)
-    adhkarVm.playSheikhSession(com.example.domain.model.AdhkarSheikhVoice.ALAFASY, true)
+    adhkarVm.previewVoice("sheikh_hussary", false)
+    assertTrue(adhkarVm.uiState.value.voiceStatusMessage?.contains("غير متوفر") == true)
+    adhkarVm.clearVoiceStatusMessage()
+    assertNull(adhkarVm.uiState.value.voiceStatusMessage)
     adhkarVm.stopSpeaking()
+  }
 
-    // Verify Religious Lessons catalog & ViewModel initialization
+  @Test
+  fun `verify official YouTube lessons catalog filters and broken video auto removal`() {
     val scholarIds = com.example.data.catalog.ScholarCatalog.scholars.map { it.id }.toSet()
-    org.junit.Assert.assertTrue(
+    assertTrue(
       scholarIds.containsAll(
-        listOf("latest", "shaarawy", "hussary", "yasser", "samir_mustafa", "ahmed_samir", "mohamed_azab")
+        listOf(
+          "latest", "shaarawy", "samir_mustafa", "yasser", "ahmed_samir",
+          "mohamed_azab", "hussary", "yaqoub", "hassan", "abdelkafy",
+          "alkhamis", "nabulsi", "ahmed_amer"
+        )
       )
     )
-    org.junit.Assert.assertTrue(com.example.data.catalog.ScholarCatalog.starterVerifiedLessons.isNotEmpty())
 
+    // Verify AI / silent / static-image filter rejects non-speaking or synthetic videos
+    assertTrue(
+      com.example.data.repository.LessonsRepository.isLikelyAiOrStaticOrNonSpeaking(
+        title = "درس بصوت ذكاء اصطناعي بدون صوت",
+        description = "",
+        requireVisualHint = false
+      )
+    )
+    assertTrue(
+      com.example.data.repository.LessonsRepository.isLikelyAiOrStaticOrNonSpeaking(
+        title = "قصة حياة الشيخ مع صورة ثابتة",
+        description = "",
+        requireVisualHint = false
+      )
+    )
+    assertTrue(
+      com.example.data.repository.LessonsRepository.isLikelyAiOrStaticOrNonSpeaking(
+        title = "سورة البقرة كاملة",
+        description = "تلاوة",
+        requireVisualHint = true
+      )
+    )
+    assertFalse(
+      com.example.data.repository.LessonsRepository.isLikelyAiOrStaticOrNonSpeaking(
+        title = "تفسير سورة البقرة - درس مرئي للشيخ الشعراوي",
+        description = "حلقة تلفزيونية كاملة",
+        requireVisualHint = true
+      )
+    )
+
+    // Verify ISO 8601 duration parser and Secrets BuildConfig key presence
+    assertEquals(3665L, com.example.data.repository.LessonsRepository.parseIsoDurationSeconds("PT1H1M5S"))
+    assertEquals(420L, com.example.data.repository.LessonsRepository.parseIsoDurationSeconds("PT7M"))
+    assertNotNull(BuildConfig.YOUTUBE_API_KEY)
+
+    // Verify broken video detection & toggleFavorite in LessonsViewModel
+    val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+    val factory = androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(app)
     val lessonsVm = factory.create(com.example.ui.viewmodel.LessonsViewModel::class.java)
-    org.junit.Assert.assertNotNull(lessonsVm)
-    val sampleLesson = com.example.data.catalog.ScholarCatalog.starterVerifiedLessons.first()
-    lessonsVm.openLesson(sampleLesson)
+    lessonsVm.toggleFavorite("dQw4w9WgXcQ")
+    assertTrue(lessonsVm.favoriteVideoIds.value.contains("dQw4w9WgXcQ"))
+    lessonsVm.toggleFavorite("dQw4w9WgXcQ")
+    assertFalse(lessonsVm.favoriteVideoIds.value.contains("dQw4w9WgXcQ"))
+
+    val dummyBroken = com.example.domain.model.ReligiousLesson(
+      id = "yt_abc12345678",
+      youtubeVideoId = "abc12345678",
+      scholarId = "shaarawy",
+      scholarName = "الشيخ محمد متولي الشعراوي",
+      channelId = "UCijSEIUA72pyzSNOf_lx5ng",
+      channelTitle = "القناة الرسمية",
+      title = "درس تجريبي",
+      description = "",
+      thumbnailUrl = "https://i.ytimg.com/vi/abc12345678/hqdefault.jpg",
+      durationSeconds = 600L,
+      publishedDateLabel = "2026-01-01",
+      isVerifiedOfficial = true
+    )
+    lessonsVm.handleBrokenOrSilentLesson(dummyBroken, "صامت")
     lessonsVm.closePlayer()
   }
 
   @Test
-  fun `verify spoken Adhan text and alarm scheduler permission helpers`() {
+  fun `verify alarm scheduler permission helpers and Adhan service without TTS`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
-    val spokenFajr = com.example.service.DhikrSpeaker.buildSpokenAdhanText("الفجر")
-    val spokenDhuhr = com.example.service.DhikrSpeaker.buildSpokenAdhanText("الظهر")
-    org.junit.Assert.assertTrue(spokenFajr.contains("الصلاة خير من النوم"))
-    org.junit.Assert.assertFalse(spokenDhuhr.contains("الصلاة خير من النوم"))
-    org.junit.Assert.assertTrue(spokenDhuhr.contains("الظهر"))
-
-    // Ensure permission check helpers execute safely on Robolectric SDK 36
     com.example.service.AlarmScheduler.canScheduleExactAlarms(context)
     com.example.service.AlarmScheduler.isIgnoringBatteryOptimizations(context)
 
     val settings = com.example.data.preferences.UserSettings()
     com.example.service.AlarmScheduler.schedulePrayerAlarms(context, settings)
 
-    // Verify AdhanAlarmReceiver invokes AdhanPlaybackService cleanly
     val receiver = com.example.receiver.AdhanAlarmReceiver()
     val alarmIntent = android.content.Intent(context, com.example.receiver.AdhanAlarmReceiver::class.java).apply {
       putExtra(com.example.receiver.AdhanAlarmReceiver.EXTRA_PRAYER_NAME, "العصر")
@@ -142,7 +221,7 @@ class ExampleRobolectricTest {
       .start()
       .resume()
     val activity = controller.get()
-    org.junit.Assert.assertNotNull(activity)
+    assertNotNull(activity)
     controller.pause().stop().destroy()
   }
 }

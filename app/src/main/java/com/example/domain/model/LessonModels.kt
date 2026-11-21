@@ -1,32 +1,28 @@
 package com.example.domain.model
 
-enum class LessonMediaType(val arabicLabel: String) {
-    VIDEO("فيديو صوت وصورة"),
-    AUDIO("درس صوتي")
-}
-
 data class LessonScholar(
     val id: String,
     val arabicName: String,
     val titleOrSpecialty: String,
-    val archiveSearchQueries: List<String>,
-    val fallbackIdentifiers: List<String> = emptyList(),
-    val categoryTag: String = "دروس وعظية"
+    val officialChannelIds: List<String> = emptyList(),
+    val officialHandles: List<String> = emptyList(),
+    val youtubeVideoSearchQueries: List<String> = emptyList(),
+    val requireVisualAppearanceFilter: Boolean = false,
+    val categoryTag: String = "القناة الرسمية • يوتيوب"
 )
 
 data class ReligiousLesson(
     val id: String,
+    val youtubeVideoId: String,
     val scholarId: String,
     val scholarName: String,
+    val channelId: String = "",
+    val channelTitle: String = "",
     val title: String,
     val description: String,
-    val mediaUrl: String,
-    val alternateAudioUrl: String? = null,
-    val thumbnailUrl: String? = null,
-    val mediaType: LessonMediaType = LessonMediaType.VIDEO,
+    val thumbnailUrl: String,
     val durationSeconds: Long = 0L,
-    val fileSizeBytes: Long = 0L,
     val publishedDateLabel: String = "",
-    val sourceLabel: String = "Archive.org",
+    val isVerifiedOfficial: Boolean = true,
     val isNewArrival: Boolean = false
 )

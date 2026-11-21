@@ -9,6 +9,6 @@
     <string name="channel_quran_audio_name">تلاوة القرآن الكريم</string>
     <string name="channel_quran_audio_desc">عناصر التحكم في تشغيل تلاوة القرآن في الخلفية</string>
     <string name="tab_lessons_title">دروس دين</string>
-    <string name="lessons_header_subtitle">دروس ومحاضرات مرئية وصوتية لأشهر الشيوخ — تعمل مع وبدون نت</string>
+    <string name="lessons_header_subtitle">دروس ومحاضرات مرئية بالصوت والصورة الحقيقية من القنوات الرسمية على يوتيوب</string>
     <string name="lessons_auto_sync_label">تحديث تلقائي</string>
 </resources>
