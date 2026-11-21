@@ -155,9 +155,18 @@ class ExampleRobolectricTest {
       )
     )
 
-    // Verify ISO 8601 duration parser and Secrets BuildConfig key presence
+    // Verify ISO 8601 duration parser, 15-minute max constraint, title cleaning, and Secrets BuildConfig key presence
+    assertEquals(900L, com.example.data.repository.LessonsRepository.MAX_LESSON_DURATION_SECONDS)
     assertEquals(3665L, com.example.data.repository.LessonsRepository.parseIsoDurationSeconds("PT1H1M5S"))
     assertEquals(420L, com.example.data.repository.LessonsRepository.parseIsoDurationSeconds("PT7M"))
+    val cleaned = com.example.data.repository.LessonsRepository.cleanLessonTitle(
+      rawTitle = "قصة موسى عليه السلام (الجزء الخامس) HD 🔥 اشترك الآن bit.ly/xyz",
+      scholarName = "الشيخ الشعراوي"
+    )
+    assertFalse(cleaned.contains("الجزء الخامس"))
+    assertFalse(cleaned.contains("bit.ly"))
+    assertFalse(cleaned.contains("اشترك"))
+    assertTrue(cleaned.contains("الشيخ الشعراوي | قصة موسى عليه السلام"))
     assertNotNull(BuildConfig.YOUTUBE_API_KEY)
 
     // Verify broken video detection & toggleFavorite in LessonsViewModel

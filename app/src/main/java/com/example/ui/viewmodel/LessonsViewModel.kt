@@ -207,7 +207,7 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                 list.filterNot { it.youtubeVideoId == brokenLesson.youtubeVideoId }
             }
 
-            // Pick next verified working video from the active list or scholar bucket
+            // Silently pick next verified working video from the active list or scholar bucket
             val candidates = (displayedLessons.value +
                 lessonsRepo.lessonsByScholar.value[brokenLesson.scholarId].orEmpty())
                 .filterNot {
@@ -220,11 +220,11 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                 _uiState.update {
                     it.copy(
                         activeLesson = alternative,
-                        statusBanner = "تم حذف الدرس غير الصالح ($reason) وتشغيل فيديو بديل موثق تلقائياً ✓"
+                        statusBanner = null
                     )
                 }
             } else {
-                // Attempt fresh sync from official channel before giving up
+                // Attempt fresh silent sync from official channel before closing
                 val scholar = ScholarCatalog.scholars.find { s -> s.id == _uiState.value.selectedScholarId }
                     ?: ScholarCatalog.scholars.find { s -> s.id == brokenLesson.scholarId }
                 val fresh = if (scholar != null && lessonsRepo.isNetworkConnected()) {
@@ -232,20 +232,11 @@ class LessonsViewModel(application: Application) : AndroidViewModel(application)
                         .firstOrNull { !sessionFailedVideoIds.contains(it.youtubeVideoId) }
                 } else null
 
-                if (fresh != null) {
-                    _uiState.update {
-                        it.copy(
-                            activeLesson = fresh,
-                            statusBanner = "تم حذف الفيديو التالف وجلب فيديو بديل شغال من القناة الرسمية ✓"
-                        )
-                    }
-                } else {
-                    _uiState.update {
-                        it.copy(
-                            activeLesson = null,
-                            statusBanner = "تم حذف الفيديو لعدم وجود صوت/تشغيل — لا توجد بدائل أخرى متاحة حالياً"
-                        )
-                    }
+                _uiState.update {
+                    it.copy(
+                        activeLesson = fresh,
+                        statusBanner = null
+                    )
                 }
             }
         }

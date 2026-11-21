@@ -475,29 +475,6 @@ private fun OfficialYouTubeLessonCard(
                             )
                         }
                     }
-
-                    Surface(
-                        color = Color(0xCC06281F),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Verified,
-                                contentDescription = null,
-                                tint = Color(0xFFE3BE64),
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                text = "قناة رسمية • صوت وصورة HD",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White
-                            )
-                        }
-                    }
                 }
 
                 val durationLabel = LessonsRepository.formatDuration(lesson.durationSeconds)
@@ -520,27 +497,13 @@ private fun OfficialYouTubeLessonCard(
             }
 
             Column(modifier = Modifier.padding(14.dp)) {
+                val cleanTitle = LessonsRepository.cleanLessonTitle(lesson.title, lesson.scholarName)
+                    .ifBlank { lesson.title }
                 Text(
-                    text = lesson.title,
+                    text = cleanTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = buildString {
-                        append(lesson.scholarName)
-                        if (lesson.channelTitle.isNotBlank() && lesson.channelTitle != lesson.scholarName) {
-                            append(" • ${lesson.channelTitle}")
-                        }
-                        if (lesson.publishedDateLabel.isNotBlank()) {
-                            append(" • ${lesson.publishedDateLabel}")
-                        }
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
 
@@ -559,7 +522,7 @@ private fun OfficialYouTubeLessonCard(
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("مشاهدة بالصوت والصورة HD")
+                        Text("مشاهدة الآن")
                     }
 
                     IconButton(

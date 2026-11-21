@@ -32,14 +32,14 @@ class LessonsRepository(context: Context) {
 
     private val appContext = context.applicationContext
     private val rootDir = File(appContext.filesDir, "offline_lessons").apply { mkdirs() }
-    private val cacheFile = File(rootDir, "youtube_official_lessons_v3.json")
+    private val cacheFile = File(rootDir, "youtube_official_lessons_v4.json")
     private val blacklistFile = File(rootDir, "broken_video_blacklist.json")
     private val favoritesFile = File(rootDir, "favorite_lessons.json")
     private val handleCacheFile = File(rootDir, "channel_id_cache.json")
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -109,16 +109,16 @@ class LessonsRepository(context: Context) {
             }
 
             if (scholar.id == "latest") {
-                // Auto-sync newest videos across the primary official scholar channels
+                // Auto-sync newest short-to-medium videos across primary official scholar channels
                 val coreScholars = ScholarCatalog.scholars.filter { it.id != "latest" }
                 val fetched = coroutineScope {
                     coreScholars.map { s ->
-                        async { fetchOfficialVideosForScholar(s, perChannelLimit = 4, markNewest = true) }
+                        async { fetchOfficialVideosForScholar(s, perChannelLimit = 2, markNewest = true) }
                     }.awaitAll().flatten()
                 }
                 val clean = filterAndDedupe(fetched)
                     .sortedByDescending { it.publishedDateLabel }
-                    .take(40)
+                    .take(30)
                 if (clean.isNotEmpty()) {
                     _lessonsByScholar.update { it + ("latest" to clean) }
                     persistCachedLessons()
@@ -126,14 +126,14 @@ class LessonsRepository(context: Context) {
                 return@withContext _lessonsByScholar.value["latest"].orEmpty()
             }
 
-            val fetched = fetchOfficialVideosForScholar(scholar, perChannelLimit = 14, markNewest = false)
+            val fetched = fetchOfficialVideosForScholar(scholar, perChannelLimit = 10, markNewest = false)
             val existing = _lessonsByScholar.value[scholar.id].orEmpty()
             val merged = filterAndDedupe(fetched + existing)
                 .sortedWith(
                     compareByDescending<ReligiousLesson> { it.isNewArrival }
                         .thenByDescending { it.publishedDateLabel }
                 )
-                .take(40)
+                .take(30)
 
             if (merged.isNotEmpty()) {
                 _lessonsByScholar.update { it + (scholar.id to merged) }
@@ -288,7 +288,7 @@ class LessonsRepository(context: Context) {
             if (uploadStatus != "processed" && uploadStatus.isNotBlank()) continue
 
             val snippet = item.optJSONObject("snippet") ?: continue
-            val title = snippet.optString("title", "").trim()
+            val rawTitle = snippet.optString("title", "").trim()
             val description = snippet.optString("description", "").trim()
             val channelId = snippet.optString("channelId", "")
             val channelTitle = snippet.optString("channelTitle", fallbackScholarName)
@@ -296,15 +296,18 @@ class LessonsRepository(context: Context) {
 
             val contentDetails = item.optJSONObject("contentDetails")
             val durationSec = parseIsoDurationSeconds(contentDetails?.optString("duration", "") ?: "")
-            // Reject YouTube Shorts, bumper clips, or broken 0s uploads
-            if (durationSec in 1L until 90L || durationSec == 0L) continue
+            // Enforce fast-loading videos strictly between 1.5 min and 15 min (900 seconds max)
+            if (durationSec < MIN_LESSON_DURATION_SECONDS || durationSec > MAX_LESSON_DURATION_SECONDS) continue
 
-            if (isLikelyAiOrStaticOrNonSpeaking(title, description, requireVisualFilter)) continue
+            if (isLikelyAiOrStaticOrNonSpeaking(rawTitle, description, requireVisualFilter)) continue
+
+            val cleanedTitle = cleanLessonTitle(rawTitle, fallbackScholarName)
+            if (cleanedTitle.isBlank()) continue
 
             val thumbs = snippet.optJSONObject("thumbnails")
-            val thumbUrl = thumbs?.optJSONObject("high")?.optString("url")
-                ?: thumbs?.optJSONObject("medium")?.optString("url")
-                ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+            val thumbUrl = thumbs?.optJSONObject("medium")?.optString("url")
+                ?: thumbs?.optJSONObject("high")?.optString("url")
+                ?: "https://i.ytimg.com/vi/$videoId/mqdefault.jpg"
 
             verified.add(
                 ReligiousLesson(
@@ -313,9 +316,9 @@ class LessonsRepository(context: Context) {
                     scholarId = scholarId,
                     scholarName = fallbackScholarName.ifBlank { channelTitle },
                     channelId = channelId,
-                    channelTitle = channelTitle,
-                    title = title,
-                    description = description.take(220),
+                    channelTitle = "",
+                    title = cleanedTitle,
+                    description = "",
                     thumbnailUrl = thumbUrl,
                     durationSeconds = durationSec,
                     publishedDateLabel = publishedAt,
@@ -337,8 +340,11 @@ class LessonsRepository(context: Context) {
         val xmlText = fetchString(feedUrl) ?: return@coroutineScope emptyList()
         val parsed = parseYouTubeAtomFeed(xmlText, channelId, scholar, markNewest)
             .filterNot { isBlacklisted(it.youtubeVideoId) }
-            .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, it.description, scholar.requireVisualAppearanceFilter) }
-            .take(limit)
+            .filterNot { isLikelyTooLongByTitle(it.title) }
+            .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, "", scholar.requireVisualAppearanceFilter) }
+            .map { it.copy(title = cleanLessonTitle(it.title, scholar.arabicName), description = "", channelTitle = "") }
+            .filter { it.title.isNotBlank() }
+            .take(limit.coerceAtMost(6))
 
         // Verify live embeddability + public availability via YouTube official oEmbed
         parsed.map { candidate ->
@@ -361,11 +367,9 @@ class LessonsRepository(context: Context) {
             parser.setInput(StringReader(xmlText))
 
             var inEntry = false
-            var channelAuthor = scholar.arabicName
             var videoId = ""
             var title = ""
             var published = ""
-            var description = ""
             var thumbUrl = ""
 
             var eventType = parser.eventType
@@ -379,18 +383,13 @@ class LessonsRepository(context: Context) {
                                 videoId = ""
                                 title = ""
                                 published = ""
-                                description = ""
                                 thumbUrl = ""
                             }
                             "yt:videoId" -> if (inEntry) videoId = safeNextText(parser).trim()
                             "title" -> if (inEntry) title = safeNextText(parser).trim()
                             "published" -> if (inEntry) published = safeNextText(parser).trim().take(10)
-                            "media:description" -> if (inEntry) description = safeNextText(parser).trim().take(220)
                             "media:thumbnail" -> if (inEntry) {
                                 thumbUrl = parser.getAttributeValue(null, "url") ?: ""
-                            }
-                            "name" -> if (!inEntry) {
-                                channelAuthor = safeNextText(parser).trim().ifBlank { scholar.arabicName }
                             }
                         }
                     }
@@ -405,10 +404,10 @@ class LessonsRepository(context: Context) {
                                         scholarId = scholar.id,
                                         scholarName = scholar.arabicName,
                                         channelId = channelId,
-                                        channelTitle = channelAuthor,
+                                        channelTitle = "",
                                         title = title,
-                                        description = description,
-                                        thumbnailUrl = thumbUrl.ifBlank { "https://i.ytimg.com/vi/$videoId/hqdefault.jpg" },
+                                        description = "",
+                                        thumbnailUrl = thumbUrl.ifBlank { "https://i.ytimg.com/vi/$videoId/mqdefault.jpg" },
                                         durationSeconds = 0L,
                                         publishedDateLabel = published,
                                         isVerifiedOfficial = true,
@@ -545,8 +544,18 @@ class LessonsRepository(context: Context) {
     private fun filterAndDedupe(list: List<ReligiousLesson>): List<ReligiousLesson> {
         return list
             .filter { YOUTUBE_VIDEO_ID_REGEX.matches(it.youtubeVideoId) }
+            .filter { it.durationSeconds == 0L || it.durationSeconds in MIN_LESSON_DURATION_SECONDS..MAX_LESSON_DURATION_SECONDS }
             .filterNot { isBlacklisted(it.youtubeVideoId) }
-            .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, it.description, false) }
+            .filterNot { isLikelyTooLongByTitle(it.title) }
+            .filterNot { isLikelyAiOrStaticOrNonSpeaking(it.title, "", false) }
+            .map {
+                it.copy(
+                    title = cleanLessonTitle(it.title, it.scholarName),
+                    description = "",
+                    channelTitle = ""
+                )
+            }
+            .filter { it.title.isNotBlank() }
             .distinctBy { it.youtubeVideoId }
     }
 
@@ -586,6 +595,7 @@ class LessonsRepository(context: Context) {
     private fun purgeLegacyNonYouTubeFiles() {
         try {
             File(rootDir, "lessons_catalog_cache.json").takeIf { it.exists() }?.delete()
+            File(rootDir, "youtube_official_lessons_v3.json").takeIf { it.exists() }?.delete()
             File(rootDir, "media").takeIf { it.exists() }?.deleteRecursively()
         } catch (_: Exception) {
         }
@@ -718,6 +728,9 @@ class LessonsRepository(context: Context) {
     }
 
     companion object {
+        const val MIN_LESSON_DURATION_SECONDS = 90L
+        const val MAX_LESSON_DURATION_SECONDS = 900L // 15 minutes max
+
         private val YOUTUBE_VIDEO_ID_REGEX = Regex("^[A-Za-z0-9_-]{11}$")
         private val CHANNEL_ID_EXTRACTOR = Pattern.compile("\"(?:externalId|channelId|browseId)\"\\s*:\\s*\"(UC[A-Za-z0-9_-]{20,26})\"")
 
@@ -728,9 +741,73 @@ class LessonsRepository(context: Context) {
             "#shorts", "shorts", "قصة حياة الشيخ", "وثائقي عن الشيخ", "معلومات عن الشيخ"
         )
 
+        private val longBroadcastKeywords = listOf(
+            "ساعتين", "ثلاث ساعات", "3 ساعات", "ساعة كاملة",
+            "بث مباشر", "المصحف كامل", "سورة البقرة كاملة", "سورة آل عمران كاملة",
+            "سورة النساء كاملة", "live stream"
+        )
+
         private val visualAppearanceHints = listOf(
             "مرئية", "فيديو", "تلفزيون", "نور على نور", "خطبة", "محاضرة", "درس", "لقاء", "حفل"
         )
+
+        fun isLikelyTooLongByTitle(title: String): Boolean {
+            val low = title.lowercase()
+            return longBroadcastKeywords.any { low.contains(it.lowercase()) }
+        }
+
+        fun cleanLessonTitle(rawTitle: String, scholarName: String = ""): String {
+            var s = rawTitle
+                // Remove URLs and hashtags
+                .replace(Regex("https?://\\S+"), " ")
+                .replace(Regex("(?:bit\\.ly|cutt\\.ly|t\\.co|youtu\\.be)/\\S+", RegexOption.IGNORE_CASE), " ")
+                .replace(Regex("#[\\p{L}\\p{N}_]+"), " ")
+                // Remove bracketed/parenthesized part numbers, episode numbers, quality tags, and promo markers
+                .replace(
+                    Regex("\\((?:[^)]*(?:الجزء|جزء|الحلقة|حلقة|مقطع|ج\\s*\\d+|ح\\s*\\d+|كامل|كاملة|بجودة|عالية|HD|MP3|حصري|اشترك)[^)]*)\\)", RegexOption.IGNORE_CASE),
+                    " "
+                )
+                .replace(Regex("\\[[^\\]]*]"), " ")
+                .replace(Regex("【[^】]*】"), " ")
+                // Remove trailing/standalone part numbers & promo phrases
+                .replace(Regex("اشترك(?:وا)?\\s+(?:الآن|في|بالقناة)[^|\\n]*", RegexOption.IGNORE_CASE), " ")
+                .replace(Regex("(?:القناة الرسمية|شاهد\\s+أيضاً|لا\\s+تنس[ىا]\\s+الاشتراك)[^|\\n]*", RegexOption.IGNORE_CASE), " ")
+                .replace(Regex("(?:الجزء|الحلقة)\\s+(?:الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|\\d+)"), " ")
+                .replace(Regex("\\b(?:HD|4K|1080p|720p|MP3|Official)\\b", RegexOption.IGNORE_CASE), " ")
+                // Strip emojis & extra decorative symbols while keeping Arabic, Latin, digits, basic punctuation & '|'
+                .replace(Regex("[^\\p{IsArabic}\\p{L}\\p{N}\\s|\\-:؟،.]"), " ")
+                .replace(Regex("\\s*[|\\-]+\\s*$"), "")
+                .replace(Regex("^\\s*[|\\-]+\\s*"), "")
+                .replace(Regex("\\s*\\|\\s*\\|\\s*"), " | ")
+                .replace(Regex("\\s{2,}"), " ")
+                .trim()
+
+            // Limit to a concise crisp headline without dangling truncated words
+            if (s.length > 68) {
+                val cut = s.substring(0, 68)
+                val lastSpace = cut.lastIndexOf(' ')
+                s = if (lastSpace > 24) cut.substring(0, lastSpace).trim() else cut.trim()
+                s = s.trimEnd('|', '-', ':', '،', ' ')
+            }
+
+            if (s.isBlank()) return ""
+
+            // Format cleanly like "الشيخ الشعراوي | قصة موسى عليه السلام" when appropriate
+            val shortScholar = scholarName.trim()
+            if (shortScholar.isNotBlank() && shortScholar != "أحدث الدروس") {
+                val keyword = shortScholar
+                    .removePrefix("الشيخ ")
+                    .removePrefix("د. ")
+                    .split(" ")
+                    .lastOrNull()
+                    .orEmpty()
+                val alreadyHasScholar = keyword.length >= 3 && s.contains(keyword, ignoreCase = true)
+                if (!alreadyHasScholar && s.length + shortScholar.length + 3 <= 76) {
+                    return "$shortScholar | $s"
+                }
+            }
+            return s
+        }
 
         fun isLikelyAiOrStaticOrNonSpeaking(
             title: String,

@@ -31,30 +31,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.ReportProblem
-import androidx.compose.material.icons.filled.Verified
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -95,13 +86,17 @@ fun LessonPlayerDialog(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var isFullscreen by remember { mutableStateOf(false) }
-    var isPlayerLoading by remember { mutableStateOf(true) }
-    var isAudioVideoConfirmed by remember { mutableStateOf(false) }
+    var isAudioVideoConfirmed by remember(lesson.youtubeVideoId) { mutableStateOf(false) }
     var customFullscreenView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
-    var reportedCurrentVideoId by remember { mutableStateOf<String?>(null) }
+    var reportedCurrentVideoId by remember(lesson.youtubeVideoId) { mutableStateOf<String?>(null) }
 
-    // Request active media AudioFocus so YouTube audio is never suppressed or muted
+    val cleanTitle = remember(lesson.title, lesson.scholarName) {
+        LessonsRepository.cleanLessonTitle(lesson.title, lesson.scholarName)
+            .ifBlank { lesson.scholarName }
+    }
+
+    // Request active media AudioFocus so YouTube audio plays unmuted at full clarity
     DisposableEffect(context) {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         var focusRequest: AudioFocusRequest? = null
@@ -131,16 +126,13 @@ fun LessonPlayerDialog(
         }
     }
 
-    // Automatic watchdog: if video has no sound, fails to start, or throws an embed error within 14s,
-    // remove it automatically and load a verified working alternative.
+    // Silent background health check: if the video is silent, broken, or stalled past 9s,
+    // silently delete it and auto-play the next verified video without any alert or button.
     LaunchedEffect(lesson.youtubeVideoId) {
-        isPlayerLoading = true
-        isAudioVideoConfirmed = false
-        reportedCurrentVideoId = null
-        delay(14_000L)
+        delay(9_000L)
         if (!isAudioVideoConfirmed && reportedCurrentVideoId != lesson.youtubeVideoId) {
             reportedCurrentVideoId = lesson.youtubeVideoId
-            latestOnBroken(latestLesson, "الفيديو لم يبدأ صوت وصورة في الوقت المتوقع")
+            latestOnBroken(latestLesson, "silent_or_stalled")
         }
     }
 
@@ -184,7 +176,7 @@ fun LessonPlayerDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
@@ -196,31 +188,12 @@ fun LessonPlayerDialog(
                                 contentDescription = "العودة لقائمة الدروس"
                             )
                         }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = lesson.scholarName,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (isAudioVideoConfirmed) Icons.Default.CheckCircle else Icons.Default.Verified,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = if (isAudioVideoConfirmed) {
-                                        "يعمل الآن صوت وصورة HD ✓"
-                                    } else {
-                                        "جاري الفحص التلقائي للصوت والصورة..."
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
+                        Text(
+                            text = lesson.scholarName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
                         IconButton(
                             onClick = { isFullscreen = true },
                             modifier = Modifier.testTag("fullscreen_lesson_button")
@@ -283,6 +256,7 @@ fun LessonPlayerDialog(
                                         loadWithOverviewMode = true
                                         useWideViewPort = true
                                         cacheMode = WebSettings.LOAD_DEFAULT
+                                        mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                         javaScriptCanOpenWindowsAutomatically = false
                                     }
                                     webViewClient = object : WebViewClient() {
@@ -290,7 +264,6 @@ fun LessonPlayerDialog(
                                             view: WebView?,
                                             request: WebResourceRequest?
                                         ): Boolean {
-                                            // Keep user strictly inside our embedded YouTube player
                                             val host = request?.url?.host.orEmpty()
                                             return !host.contains("youtube.com") && !host.contains("youtube-nocookie.com")
                                         }
@@ -314,16 +287,16 @@ fun LessonPlayerDialog(
                                     val bridge = YouTubePlayerJsBridge(
                                         onReady = { durationSec ->
                                             mainHandler.post {
-                                                isPlayerLoading = false
-                                                if (durationSec <= 0.5 && reportedCurrentVideoId != latestLesson.youtubeVideoId) {
+                                                val tooShortOrTooLong =
+                                                    durationSec <= 0.5 || durationSec > LessonsRepository.MAX_LESSON_DURATION_SECONDS
+                                                if (tooShortOrTooLong && reportedCurrentVideoId != latestLesson.youtubeVideoId) {
                                                     reportedCurrentVideoId = latestLesson.youtubeVideoId
-                                                    latestOnBroken(latestLesson, "الفيديو فارغ أو بدون مدة تشغيل")
+                                                    latestOnBroken(latestLesson, "invalid_duration")
                                                 }
                                             }
                                         },
                                         onConfirmedHealthy = {
                                             mainHandler.post {
-                                                isPlayerLoading = false
                                                 isAudioVideoConfirmed = true
                                             }
                                         },
@@ -331,7 +304,7 @@ fun LessonPlayerDialog(
                                             mainHandler.post {
                                                 if (reportedCurrentVideoId != latestLesson.youtubeVideoId) {
                                                     reportedCurrentVideoId = latestLesson.youtubeVideoId
-                                                    latestOnBroken(latestLesson, "تعذر تشغيل الفيديو من يوتيوب (رمز $code)")
+                                                    latestOnBroken(latestLesson, "error_$code")
                                                 }
                                             }
                                         },
@@ -370,10 +343,6 @@ fun LessonPlayerDialog(
                         )
                     }
 
-                    if (isPlayerLoading) {
-                        CircularProgressIndicator(color = Color(0xFFE3BE64))
-                    }
-
                     if (isFullscreen && customFullscreenView == null) {
                         IconButton(
                             onClick = { isFullscreen = false },
@@ -390,85 +359,33 @@ fun LessonPlayerDialog(
                     }
                 }
 
+                // Clean, minimal below-video area: ONLY title + Save to Favorites button
                 if (!isFullscreen) {
                     Column(
                         modifier = Modifier
                             .weight(1f)
                             .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .padding(horizontal = 16.dp, vertical = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(
-                            text = lesson.title,
+                            text = cleanTitle,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
 
-                        Surface(
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            val durLabel = LessonsRepository.formatDuration(lesson.durationSeconds)
-                            val sourceTag = if (lesson.channelTitle.isNotBlank()) {
-                                "القناة الرسمية: ${lesson.channelTitle}"
-                            } else {
-                                "القناة الرسمية • يوتيوب"
-                            }
-                            Text(
-                                text = listOfNotNull(
-                                    sourceTag,
-                                    durLabel.takeIf { it.isNotBlank() },
-                                    lesson.publishedDateLabel.takeIf { it.isNotBlank() }
-                                ).joinToString(" • "),
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                        }
-
-                        if (lesson.description.isNotBlank()) {
-                            Text(
-                                text = lesson.description,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilledTonalButton(
-                                onClick = onToggleFavorite,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("player_favorite_lesson_button")
-                            ) {
-                                Icon(
-                                    imageVector = if (isFavorite) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                                    contentDescription = null
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(if (isFavorite) "في المفضلة ✓" else "حفظ في المفضلة")
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                if (reportedCurrentVideoId != lesson.youtubeVideoId) {
-                                    reportedCurrentVideoId = lesson.youtubeVideoId
-                                    onBrokenVideoDetected(lesson, "تبديل تلقائي لفيديو بديل بناءً على الفحص")
-                                }
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            ),
+                        FilledTonalButton(
+                            onClick = onToggleFavorite,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("report_replace_lesson_button")
+                                .testTag("player_favorite_lesson_button")
                         ) {
-                            Icon(Icons.Default.ReportProblem, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("الفيديو بلا صوت أو متوقف؟ احذفه وشغّل البديل")
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                contentDescription = null
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (isFavorite) "في المفضلة ✓" else "حفظ في المفضلة")
                         }
                     }
                 }
@@ -513,33 +430,25 @@ private fun buildYouTubePlayerHtml(videoId: String): String {
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
-  #player { position:absolute; top:0; left:0; width:100%; height:100%; }
+  iframe { position:absolute; top:0; left:0; width:100%; height:100%; border:0; }
 </style>
 </head>
 <body>
-<div id="player"></div>
+<iframe id="ytplayer"
+  src="https://www.youtube.com/embed/$cleanId?autoplay=1&playsinline=1&controls=1&rel=0&modestbranding=1&fs=1&enablejsapi=1&vq=hd720&origin=https://www.youtube.com"
+  allow="autoplay; encrypted-media; fullscreen"
+  allowfullscreen>
+</iframe>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
   var player;
   var playStartTime = -1;
   var healthChecked = false;
   var healthInterval = null;
+  var autoPlayTriggered = false;
 
   function onYouTubeIframeAPIReady() {
-    player = new YT.Player('player', {
-      width: '100%',
-      height: '100%',
-      videoId: '$cleanId',
-      playerVars: {
-        'autoplay': 1,
-        'controls': 1,
-        'rel': 0,
-        'modestbranding': 1,
-        'playsinline': 1,
-        'fs': 1,
-        'enablejsapi': 1,
-        'origin': 'https://www.youtube.com'
-      },
+    player = new YT.Player('ytplayer', {
       events: {
         'onReady': onPlayerReady,
         'onStateChange': onPlayerStateChange,
@@ -548,17 +457,29 @@ private fun buildYouTubePlayerHtml(videoId: String): String {
     });
   }
 
-  function onPlayerReady(event) {
+  function kickAutoPlay() {
     try {
+      if (!player) return;
       player.unMute();
       player.setVolume(100);
+      player.setPlaybackQuality('hd720');
       player.playVideo();
+    } catch (e) {}
+  }
+
+  function onPlayerReady(event) {
+    autoPlayTriggered = true;
+    kickAutoPlay();
+    try {
       var dur = player.getDuration() || 0;
       if (window.AndroidYT) window.AndroidYT.onPlayerReady(dur);
     } catch (e) {}
   }
 
   function onPlayerStateChange(event) {
+    if ((event.data === YT.PlayerState.CUED || event.data === YT.PlayerState.UNSTARTED) && !healthChecked) {
+      kickAutoPlay();
+    }
     if (event.data === YT.PlayerState.PLAYING && !healthChecked) {
       try {
         player.unMute();
@@ -576,18 +497,23 @@ private fun buildYouTubePlayerHtml(videoId: String): String {
             var nowTime = player.getCurrentTime() || 0;
             var dur = player.getDuration() || 0;
             var vol = player.getVolume();
-            if (dur > 1 && nowTime > playStartTime + 0.3 && !player.isMuted() && vol > 0) {
+            if (dur > 900) {
+              clearInterval(healthInterval);
+              if (window.AndroidYT) window.AndroidYT.onSilentDetected("over_15_min");
+              return;
+            }
+            if (dur > 1 && nowTime > playStartTime + 0.25 && !player.isMuted() && vol > 0) {
               healthChecked = true;
               clearInterval(healthInterval);
               if (window.AndroidYT) window.AndroidYT.onVideoHealthy();
             } else if (checks >= 6) {
               clearInterval(healthInterval);
               if (player.isMuted() || vol === 0 || dur <= 1) {
-                if (window.AndroidYT) window.AndroidYT.onSilentDetected("الفيديو بدون صوت أو غير صالح");
+                if (window.AndroidYT) window.AndroidYT.onSilentDetected("silent");
               }
             }
           } catch (e) {}
-        }, 800);
+        }, 650);
       } catch (e) {}
     }
   }
