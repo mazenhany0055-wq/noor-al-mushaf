@@ -169,7 +169,11 @@ fun AdhkarScreen(
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
                                 Text(
-                                    text = "${selectedSheikh.arabicName} • الآيات: $selectedQuranReciterName",
+                                    text = if (selectedSheikh == AdhkarSheikhVoice.MULTI_SHEIKHS) {
+                                        "${selectedSheikh.arabicName} • بدون أصوات آلية"
+                                    } else {
+                                        "${selectedSheikh.arabicName} • الآيات: $selectedQuranReciterName"
+                                    },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                                 )

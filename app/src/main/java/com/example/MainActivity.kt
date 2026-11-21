@@ -13,15 +13,17 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.AccessTimeFilled
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Headphones
-import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.OndemandVideo
 import androidx.compose.material.icons.outlined.RadioButtonChecked
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -37,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,11 +56,13 @@ import com.example.ui.navigation.NoorRoutes
 import com.example.ui.screens.AdhkarScreen
 import com.example.ui.screens.AudioPlayerScreen
 import com.example.ui.screens.HomePrayerScreen
+import com.example.ui.screens.LessonsScreen
 import com.example.ui.screens.MushafReaderScreen
 import com.example.ui.screens.QuranIndexScreen
 import com.example.ui.screens.TasbihScreen
 import com.example.ui.theme.NoorAlMushafTheme
 import com.example.ui.viewmodel.AdhkarViewModel
+import com.example.ui.viewmodel.LessonsViewModel
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.QuranViewModel
 import com.example.ui.viewmodel.TasbihViewModel
@@ -71,8 +76,9 @@ private data class BottomNavTab(
 
 private val bottomTabs = listOf(
     BottomNavTab(NoorRoutes.HOME, "الصلاة", Icons.Filled.AccessTimeFilled, Icons.Outlined.AccessTime),
-    BottomNavTab(NoorRoutes.QURAN, "المصحف", Icons.Filled.MenuBook, Icons.Outlined.MenuBook),
+    BottomNavTab(NoorRoutes.QURAN, "المصحف", Icons.AutoMirrored.Filled.MenuBook, Icons.AutoMirrored.Outlined.MenuBook),
     BottomNavTab(NoorRoutes.AUDIO, "الاستماع", Icons.Filled.Headphones, Icons.Outlined.Headphones),
+    BottomNavTab(NoorRoutes.LESSONS, "دروس", Icons.Filled.OndemandVideo, Icons.Outlined.OndemandVideo),
     BottomNavTab(NoorRoutes.TASBIH, "المسبحة", Icons.Filled.RadioButtonChecked, Icons.Outlined.RadioButtonChecked),
     BottomNavTab(NoorRoutes.ADHKAR, "الأذكار", Icons.Filled.AutoStories, Icons.Outlined.AutoStories)
 )
@@ -86,6 +92,7 @@ class MainActivity : ComponentActivity() {
             val quranViewModel: QuranViewModel = viewModel()
             val tasbihViewModel: TasbihViewModel = viewModel()
             val adhkarViewModel: AdhkarViewModel = viewModel()
+            val lessonsViewModel: LessonsViewModel = viewModel()
 
             val settings by mainViewModel.settings.collectAsStateWithLifecycle()
             val darkTheme = when (settings.darkModeSetting) {
@@ -100,7 +107,8 @@ class MainActivity : ComponentActivity() {
                         mainViewModel = mainViewModel,
                         quranViewModel = quranViewModel,
                         tasbihViewModel = tasbihViewModel,
-                        adhkarViewModel = adhkarViewModel
+                        adhkarViewModel = adhkarViewModel,
+                        lessonsViewModel = lessonsViewModel
                     )
                 }
             }
@@ -113,7 +121,8 @@ private fun NoorAlMushafAppShell(
     mainViewModel: MainViewModel,
     quranViewModel: QuranViewModel,
     tasbihViewModel: TasbihViewModel,
-    adhkarViewModel: AdhkarViewModel
+    adhkarViewModel: AdhkarViewModel,
+    lessonsViewModel: LessonsViewModel
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -133,6 +142,11 @@ private fun NoorAlMushafAppShell(
     val tasbihItems by tasbihViewModel.items.collectAsStateWithLifecycle()
     val totalLifetimeTasbih by tasbihViewModel.totalLifetimeCount.collectAsStateWithLifecycle()
     val adhkarState by adhkarViewModel.uiState.collectAsStateWithLifecycle()
+    val lessonsState by lessonsViewModel.uiState.collectAsStateWithLifecycle()
+    val displayedLessons by lessonsViewModel.displayedLessons.collectAsStateWithLifecycle()
+    val offlineLessonFiles by lessonsViewModel.offlineLessonFiles.collectAsStateWithLifecycle()
+    val lessonDownloadProgress by lessonsViewModel.downloadProgress.collectAsStateWithLifecycle()
+    val lessonOfflineBytes by lessonsViewModel.totalOfflineBytes.collectAsStateWithLifecycle()
 
     val isFullScreenReader = currentRoute?.startsWith("mushaf_reader") == true
 
@@ -200,7 +214,14 @@ private fun NoorAlMushafAppShell(
                                                     contentDescription = tab.label
                                                 )
                                             },
-                                            label = { Text(tab.label) },
+                                            label = {
+                                                Text(
+                                                    text = tab.label,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            },
                                             modifier = Modifier.testTag("nav_${tab.route}")
                                         )
                                     }
@@ -244,6 +265,7 @@ private fun NoorAlMushafAppShell(
                                 navController.navigate(NoorRoutes.mushafReader(page))
                             },
                             onNavigateToAdhkar = { navigateTopLevel(NoorRoutes.ADHKAR) },
+                            onNavigateToLessons = { navigateTopLevel(NoorRoutes.LESSONS) },
                             onUpdateDarkMode = { mainViewModel.updateDarkModeSetting(it) },
                             onDismissBanner = { mainViewModel.dismissBanner() }
                         )
@@ -290,6 +312,34 @@ private fun NoorAlMushafAppShell(
                             onNextSurah = { mainViewModel.audioManager.playNextSurah() },
                             onPreviousSurah = { mainViewModel.audioManager.playPreviousSurah() },
                             onSeekTo = { mainViewModel.audioManager.seekTo(it) }
+                        )
+                    }
+
+                    composable(NoorRoutes.LESSONS) {
+                        LessonsScreen(
+                            uiState = lessonsState,
+                            displayedLessons = displayedLessons,
+                            offlineLessonFiles = offlineLessonFiles,
+                            downloadProgress = lessonDownloadProgress,
+                            totalOfflineBytes = lessonOfflineBytes,
+                            onSelectScholar = { lessonsViewModel.selectScholar(it) },
+                            onSearchQueryChange = { lessonsViewModel.updateSearchQuery(it) },
+                            onSubmitSearch = { lessonsViewModel.submitOnlineSearch() },
+                            onRefreshLessons = { lessonsViewModel.refreshCurrentScholar() },
+                            onToggleOfflineOnly = { lessonsViewModel.setShowOfflineOnly(it) },
+                            onSelectMediaFilter = { lessonsViewModel.setMediaFilter(it) },
+                            onOpenLesson = { lesson ->
+                                if (audioState.isPlaying) {
+                                    mainViewModel.audioManager.togglePlayPause()
+                                }
+                                adhkarViewModel.stopSpeaking()
+                                lessonsViewModel.openLesson(lesson)
+                            },
+                            onDownloadLesson = { lessonsViewModel.downloadLesson(it) },
+                            onDeleteDownloadedLesson = { lessonsViewModel.deleteDownloadedLesson(it) },
+                            onTogglePlayerAudioOnly = { lessonsViewModel.togglePlayerAudioOnly() },
+                            onClosePlayer = { lessonsViewModel.closePlayer() },
+                            onDismissStatusBanner = { lessonsViewModel.clearStatusBanner() }
                         )
                     }
 

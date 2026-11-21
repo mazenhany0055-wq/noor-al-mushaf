@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.VolumeUp
@@ -115,6 +116,7 @@ fun HomePrayerScreen(
     onTogglePeriodicDhikr: (Boolean) -> Unit,
     onOpenMushafPage: (Int) -> Unit,
     onNavigateToAdhkar: () -> Unit,
+    onNavigateToLessons: () -> Unit,
     onUpdateDarkMode: (String) -> Unit,
     onDismissBanner: () -> Unit
 ) {
@@ -469,6 +471,59 @@ fun HomePrayerScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f),
                                 maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Religious Lessons Video & Audio Shortcut Card
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToLessons() }
+                        .testTag("home_lessons_card"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(46.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OndemandVideo,
+                                contentDescription = "دروس دين",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "دروس دين (فيديو وصوت HD)",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                text = "الشعراوي، الحصري، الدوسري، سمير مصطفى، أحمد سمير وعزب • مع/بدون نت",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }

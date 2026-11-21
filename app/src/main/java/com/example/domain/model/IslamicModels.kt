@@ -235,6 +235,16 @@ enum class AdhkarSheikhVoice(
     val bundledMorningAsset: String? = null,
     val bundledEveningAsset: String? = null
 ) {
+    MULTI_SHEIKHS(
+        id = "sheikh_multi",
+        arabicName = "تنويع تلقائي بين الشيوخ الحقيقيين",
+        description = "يتنوع الصوت تلقائياً بين العفاسي والدوسري والحصري والقطامي والغامدي والمعيقلي وحمد الدريهم",
+        quranReciterId = "afs",
+        morningSessionUrl = "https://archive.org/download/adkar_sabah_masae_safar/2%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D8%B5%D8%A8%D8%A7%D8%AD%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3",
+        eveningSessionUrl = "https://archive.org/download/adkar_sabah_masae_safar/3%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3",
+        bundledMorningAsset = "audio/adhkar/sessions/sheikh_alafasy_morning.mp3",
+        bundledEveningAsset = "audio/adhkar/sessions/sheikh_alafasy_evening.mp3"
+    ),
     ALAFASY(
         id = "sheikh_alafasy",
         arabicName = "الشيخ مشاري راشد العفاسي",
@@ -244,6 +254,18 @@ enum class AdhkarSheikhVoice(
         eveningSessionUrl = "https://archive.org/download/adkar_sabah_masae_safar/3%20%D8%A3%D8%B0%D9%83%D8%A7%D8%B1%20%D8%A7%D9%84%D9%85%D8%B3%D8%A7%D8%A1%20-%20%D8%A8%D8%B5%D9%88%D8%AA%20%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%20%D8%A7%D9%84%D8%B9%D9%81%D8%A7%D8%B3%D9%8A.mp3",
         bundledMorningAsset = "audio/adhkar/sessions/sheikh_alafasy_morning.mp3",
         bundledEveningAsset = "audio/adhkar/sessions/sheikh_alafasy_evening.mp3"
+    ),
+    YASSER_ALDOSSARY(
+        id = "sheikh_yasser",
+        arabicName = "الشيخ ياسر الدوسري",
+        description = "أذكار وآيات قرآنية خاشعة بصوت الشيخ الدوسري",
+        quranReciterId = "yasser"
+    ),
+    HUSSARY(
+        id = "sheikh_hussary",
+        arabicName = "الشيخ محمود خليل الحصري",
+        description = "تلاوات وأدعية قرآنية متقنة بصوت الشيخ الحصري",
+        quranReciterId = "husr"
     ),
     HAMAD_AL_DURAYHIM(
         id = "sheikh_hisn",
@@ -266,22 +288,16 @@ enum class AdhkarSheikhVoice(
         quranReciterId = "sgmd",
         morningSessionUrl = "https://archive.org/download/20250607_20250607_1005/20250607_20250607_1005.mp3"
     ),
-    YASSER_ALDOSSARY(
-        id = "sheikh_yasser",
-        arabicName = "الشيخ ياسر الدوسري",
-        description = "آيات الأذكار بصوت الدوسري + أذكار حصن المسلم",
-        quranReciterId = "yasser"
-    ),
     MAHER_ALMUAIQLY(
         id = "sheikh_maher",
         arabicName = "الشيخ ماهر المعيقلي",
-        description = "آيات الأذكار بصوت المعيقلي + أذكار حصن المسلم",
+        description = "آيات الأذكار والأدعية القرآنية بصوت المعيقلي",
         quranReciterId = "maher"
     );
 
     companion object {
         fun fromId(id: String): AdhkarSheikhVoice =
-            entries.find { it.id == id } ?: ALAFASY
+            entries.find { it.id == id } ?: MULTI_SHEIKHS
     }
 }
 

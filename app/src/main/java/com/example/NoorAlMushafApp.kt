@@ -16,6 +16,9 @@ class NoorAlMushafApp : Application() {
     val offlineAudioRepository: com.example.data.repository.OfflineAudioRepository by lazy {
         com.example.data.repository.OfflineAudioRepository(this)
     }
+    val lessonsRepository: com.example.data.repository.LessonsRepository by lazy {
+        com.example.data.repository.LessonsRepository(this)
+    }
     val quranRepository: QuranRepository by lazy {
         QuranRepository(
             context = this,

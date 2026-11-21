@@ -51,7 +51,7 @@ data class UserSettings(
     val tasbihSoundEnabled: Boolean = true,
     val tasbihVibrationEnabled: Boolean = true,
     val selectedTasbihId: Int = 1,
-    val adhkarVoiceId: String = AdhkarSheikhVoice.ALAFASY.id,
+    val adhkarVoiceId: String = AdhkarSheikhVoice.MULTI_SHEIKHS.id,
     val adhkarQuranReciterId: String = "afs",
     val adhkarChimeBeforeVoice: Boolean = false
 ) {
@@ -93,7 +93,7 @@ class UserPreferencesRepository(private val context: Context) {
         val TASBIH_SOUND = booleanPreferencesKey("tasbih_sound")
         val TASBIH_VIBRATION = booleanPreferencesKey("tasbih_vibration")
         val SELECTED_TASBIH_ID = intPreferencesKey("selected_tasbih_id")
-        val ADHKAR_VOICE_ID = stringPreferencesKey("adhkar_sheikh_id")
+        val ADHKAR_VOICE_ID = stringPreferencesKey("adhkar_sheikh_v2_id")
         val ADHKAR_QURAN_RECITER_ID = stringPreferencesKey("adhkar_quran_reciter_id")
         val ADHKAR_CHIME_BEFORE_VOICE = booleanPreferencesKey("adhkar_chime_before_voice")
     }
@@ -126,7 +126,7 @@ class UserPreferencesRepository(private val context: Context) {
             tasbihSoundEnabled = prefs[Keys.TASBIH_SOUND] ?: true,
             tasbihVibrationEnabled = prefs[Keys.TASBIH_VIBRATION] ?: true,
             selectedTasbihId = prefs[Keys.SELECTED_TASBIH_ID] ?: 1,
-            adhkarVoiceId = prefs[Keys.ADHKAR_VOICE_ID] ?: AdhkarSheikhVoice.ALAFASY.id,
+            adhkarVoiceId = prefs[Keys.ADHKAR_VOICE_ID] ?: AdhkarSheikhVoice.MULTI_SHEIKHS.id,
             adhkarQuranReciterId = prefs[Keys.ADHKAR_QURAN_RECITER_ID] ?: "afs",
             adhkarChimeBeforeVoice = prefs[Keys.ADHKAR_CHIME_BEFORE_VOICE] ?: false
         )

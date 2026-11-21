@@ -52,7 +52,7 @@ class ExampleRobolectricTest {
     org.junit.Assert.assertTrue(com.example.domain.model.PeriodicDhikrMode.SILENT_NOTIFICATION.includesNotification)
 
     val defaultSettings = com.example.data.preferences.UserSettings()
-    assertEquals("sheikh_alafasy", defaultSettings.adhkarVoiceId)
+    assertEquals("sheikh_multi", defaultSettings.adhkarVoiceId)
     assertEquals("afs", defaultSettings.adhkarQuranReciterId)
 
     org.junit.Assert.assertEquals(
@@ -64,7 +64,11 @@ class ExampleRobolectricTest {
       com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_qatami")
     )
     org.junit.Assert.assertEquals(
-      com.example.domain.model.AdhkarSheikhVoice.ALAFASY,
+      com.example.domain.model.AdhkarSheikhVoice.HUSSARY,
+      com.example.domain.model.AdhkarSheikhVoice.fromId("sheikh_hussary")
+    )
+    org.junit.Assert.assertEquals(
+      com.example.domain.model.AdhkarSheikhVoice.MULTI_SHEIKHS,
       com.example.domain.model.AdhkarSheikhVoice.fromId("unknown_id")
     )
 
@@ -75,9 +79,25 @@ class ExampleRobolectricTest {
 
     val factory = androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(app)
     val adhkarVm = factory.create(com.example.ui.viewmodel.AdhkarViewModel::class.java)
+    adhkarVm.previewVoice("sheikh_multi", false)
     adhkarVm.previewVoice("sheikh_alafasy", false)
     adhkarVm.playSheikhSession(com.example.domain.model.AdhkarSheikhVoice.ALAFASY, true)
     adhkarVm.stopSpeaking()
+
+    // Verify Religious Lessons catalog & ViewModel initialization
+    val scholarIds = com.example.data.catalog.ScholarCatalog.scholars.map { it.id }.toSet()
+    org.junit.Assert.assertTrue(
+      scholarIds.containsAll(
+        listOf("latest", "shaarawy", "hussary", "yasser", "samir_mustafa", "ahmed_samir", "mohamed_azab")
+      )
+    )
+    org.junit.Assert.assertTrue(com.example.data.catalog.ScholarCatalog.starterVerifiedLessons.isNotEmpty())
+
+    val lessonsVm = factory.create(com.example.ui.viewmodel.LessonsViewModel::class.java)
+    org.junit.Assert.assertNotNull(lessonsVm)
+    val sampleLesson = com.example.data.catalog.ScholarCatalog.starterVerifiedLessons.first()
+    lessonsVm.openLesson(sampleLesson)
+    lessonsVm.closePlayer()
   }
 
   @Test

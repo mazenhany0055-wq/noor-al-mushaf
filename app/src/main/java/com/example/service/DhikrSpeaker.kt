@@ -41,6 +41,7 @@ class DhikrSpeaker(
     private var mediaPlayer: MediaPlayer? = null
     private var currentContinuation: CancellableContinuation<Unit>? = null
     private var currentOnFinished: (() -> Unit)? = null
+    private var rotationCursor: Int = 0
 
     private val _availableSystemVoices = MutableStateFlow<List<OfflineTtsVoiceInfo>>(emptyList())
     val availableSystemVoices: StateFlow<List<OfflineTtsVoiceInfo>> = _availableSystemVoices.asStateFlow()
@@ -49,7 +50,7 @@ class DhikrSpeaker(
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
     fun warmUp() {
-        ensureTtsInitialized {}
+        // Real human Sheikh MP3 audio requires no synthetic TTS initialization.
     }
 
     fun playDhikrItem(
@@ -63,9 +64,9 @@ class DhikrSpeaker(
         stop()
 
         val sheikh = AdhkarSheikhVoice.fromId(voiceId)
-        val effectiveReciterId = if (voiceId.startsWith("sheikh_")) sheikh.quranReciterId else quranReciterId
+        val effectiveReciterId = resolveReciterForPlay(sheikh, quranReciterId)
 
-        // 1. Try instant local/bundled real-sheikh recording
+        // 1. Try instant local/bundled real-sheikh recording (NEVER robotic TTS)
         val immediateUri = resolveLocalDhikrUri(item, effectiveReciterId)
         if (immediateUri != null) {
             if (chimeBefore) playChime()
@@ -74,7 +75,7 @@ class DhikrSpeaker(
             }
         }
 
-        // 2. If online, fetch real Sheikh MP3 recording cleanly (never robotic TTS!)
+        // 2. If online, fetch genuine Sheikh MP3 recording cleanly
         if (offlineAudioRepository.isNetworkConnected()) {
             _isSpeaking.value = true
             fetchJob = scope.launch {
@@ -85,25 +86,13 @@ class DhikrSpeaker(
                         return@launch
                     }
                 }
-                speakDhikr(
-                    phrase = item.text,
-                    voiceId = voiceId,
-                    chimeBefore = chimeBefore,
-                    useMediaUsage = useMediaUsage,
-                    onFinished = onFinished
-                )
+                playEmergencyRealSheikhFallback(effectiveReciterId, chimeBefore, useMediaUsage, onFinished)
             }
             return
         }
 
-        // 3. Offline emergency fallback only if clip was not bundled/cached
-        speakDhikr(
-            phrase = item.text,
-            voiceId = voiceId,
-            chimeBefore = chimeBefore,
-            useMediaUsage = useMediaUsage,
-            onFinished = onFinished
-        )
+        // 3. Strictly real human Sheikh fallback when offline (zero AI/TTS voice)
+        playEmergencyRealSheikhFallback(effectiveReciterId, chimeBefore, useMediaUsage, onFinished)
     }
 
     fun playPeriodicDhikr(
@@ -115,10 +104,11 @@ class DhikrSpeaker(
         onFinished: (() -> Unit)? = null
     ) {
         stop()
-        val offlineUri = offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)
-        if (offlineUri != null) {
+        val sheikh = AdhkarSheikhVoice.fromId(voiceId)
+        val localUri = resolvePeriodicLocalUri(sheikh, phraseIndex)
+        if (localUri != null) {
             if (chimeBefore) playChime()
-            if (playOfflineUri(offlineUri, useMediaUsage, onFinished)) {
+            if (playOfflineUri(localUri, useMediaUsage, onFinished)) {
                 return
             }
         }
@@ -126,31 +116,19 @@ class DhikrSpeaker(
         if (offlineAudioRepository.isNetworkConnected()) {
             _isSpeaking.value = true
             fetchJob = scope.launch {
-                val cached = offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
-                if (cached != null) {
+                val remote = fetchPeriodicRemoteUri(sheikh, phraseIndex, phraseText)
+                if (remote != null) {
                     if (chimeBefore) playChime()
-                    if (playOfflineUri(cached, useMediaUsage, onFinished)) {
+                    if (playOfflineUri(remote, useMediaUsage, onFinished)) {
                         return@launch
                     }
                 }
-                speakDhikr(
-                    phrase = phraseText,
-                    voiceId = voiceId,
-                    chimeBefore = chimeBefore,
-                    useMediaUsage = useMediaUsage,
-                    onFinished = onFinished
-                )
+                playEmergencyRealSheikhFallback(sheikh.quranReciterId, chimeBefore, useMediaUsage, onFinished)
             }
             return
         }
 
-        speakDhikr(
-            phrase = phraseText,
-            voiceId = voiceId,
-            chimeBefore = chimeBefore,
-            useMediaUsage = useMediaUsage,
-            onFinished = onFinished
-        )
+        playEmergencyRealSheikhFallback(sheikh.quranReciterId, chimeBefore, useMediaUsage, onFinished)
     }
 
     suspend fun playPeriodicDhikrAndAwait(
@@ -160,16 +138,18 @@ class DhikrSpeaker(
         chimeBefore: Boolean,
         timeoutMs: Long = 22_000L
     ) {
-        val localUri = offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)
+        val sheikh = AdhkarSheikhVoice.fromId(voiceId)
+        val localUri = resolvePeriodicLocalUri(sheikh, phraseIndex)
             ?: if (offlineAudioRepository.isNetworkConnected()) {
-                offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
+                fetchPeriodicRemoteUri(sheikh, phraseIndex, phraseText)
             } else {
                 null
             }
+            ?: resolveAnyBundledRealSheikhUri(sheikh.quranReciterId)
 
         if (localUri != null) {
             if (chimeBefore) playChime()
-            val playedRealSheikh = withTimeoutOrNull(timeoutMs) {
+            withTimeoutOrNull(timeoutMs) {
                 suspendCancellableCoroutine<Boolean> { cont ->
                     val started = playOfflineUri(localUri, useMediaUsage = false) {
                         if (cont.isActive) cont.resume(true)
@@ -180,15 +160,9 @@ class DhikrSpeaker(
                     cont.invokeOnCancellation { stop() }
                 }
             }
-            if (playedRealSheikh == true) return
+        } else if (chimeBefore) {
+            playChime()
         }
-
-        speakAndAwait(
-            phrase = phraseText,
-            voiceId = voiceId,
-            chimeBefore = chimeBefore,
-            timeoutMs = 9_000L
-        )
     }
 
     fun playSheikhSession(
@@ -214,12 +188,6 @@ class DhikrSpeaker(
         onFinished: (() -> Unit)? = null
     ) {
         stop()
-        // Try playing Sheikh's genuine recording (Ayat Al-Kursi / Fatiha / Hisn Dhikr / Session)
-        val reciterAyah = offlineAudioRepository.getOfflineAyahUri(sheikh.quranReciterId, 2, 255)
-            ?: offlineAudioRepository.getOfflineDhikrClipUri("m2")
-            ?: offlineAudioRepository.getOfflinePeriodicDhikrUri(0)
-            ?: offlineAudioRepository.getOfflineSurahUri(sheikh.quranReciterId, 1)
-            ?: offlineAudioRepository.getOfflineAdhkarSessionUri(sheikh, true)
 
         if (sheikh == AdhkarSheikhVoice.HAMAD_AL_DURAYHIM) {
             val hisnUri = offlineAudioRepository.getOfflineDhikrClipUri("m2")
@@ -230,39 +198,54 @@ class DhikrSpeaker(
             }
         }
 
-        if (reciterAyah != null) {
+        val targetReciterId = if (sheikh == AdhkarSheikhVoice.MULTI_SHEIKHS) {
+            rotatingReciterIds[(rotationCursor++) % rotatingReciterIds.size]
+        } else {
+            sheikh.quranReciterId
+        }
+        val previewAyah = periodicAyahPool[(rotationCursor) % periodicAyahPool.size]
+
+        val localPreview = offlineAudioRepository.getOfflineAyahUri(targetReciterId, previewAyah.first, previewAyah.second)
+            ?: offlineAudioRepository.getOfflineAyahUri(targetReciterId, 2, 255)
+            ?: if (sheikh == AdhkarSheikhVoice.MULTI_SHEIKHS) {
+                offlineAudioRepository.getOfflineDhikrClipUri("m2")
+                    ?: offlineAudioRepository.getOfflinePeriodicDhikrUri(0)
+            } else null
+
+        if (localPreview != null) {
             if (chimeBefore) playChime()
-            if (playOfflineUri(reciterAyah, useMediaUsage = true, onFinished = onFinished)) return
+            if (playOfflineUri(localPreview, useMediaUsage = true, onFinished = onFinished)) return
         }
 
         if (offlineAudioRepository.isNetworkConnected()) {
             _isSpeaking.value = true
             fetchJob = scope.launch {
                 val downloaded = if (sheikh == AdhkarSheikhVoice.HAMAD_AL_DURAYHIM) {
-                    offlineAudioRepository.fetchAndCacheHisnDhikrClip("m2", AdhkarCatalog.allDhikr.firstOrNull { it.id == "m2" }?.text ?: "")
+                    offlineAudioRepository.fetchAndCacheHisnDhikrClip(
+                        "m2",
+                        AdhkarCatalog.allDhikr.firstOrNull { it.id == "m2" }?.text ?: ""
+                    )
                 } else {
-                    offlineAudioRepository.downloadAyahClip(sheikh.quranReciterId, 2, 255)
+                    offlineAudioRepository.downloadAyahClip(targetReciterId, previewAyah.first, previewAyah.second)
+                        ?: offlineAudioRepository.downloadAyahClip(targetReciterId, 2, 255)
                         ?: offlineAudioRepository.fetchAndCachePeriodicClip(0, AdhkarCatalog.periodicDhikrPhrases.first())
                 }
                 if (downloaded != null) {
                     if (chimeBefore) playChime()
                     if (playOfflineUri(downloaded, useMediaUsage = true, onFinished = onFinished)) return@launch
                 }
-                _isSpeaking.value = false
-                onFinished?.invoke()
+                playEmergencyRealSheikhFallback(targetReciterId, chimeBefore, useMediaUsage = true, onFinished = onFinished)
             }
             return
         }
 
-        speakDhikr(
-            phrase = "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ، سُبْحَانَ اللَّهِ الْعَظِيمِ",
-            voiceId = sheikh.id,
-            chimeBefore = chimeBefore,
-            useMediaUsage = true,
-            onFinished = onFinished
-        )
+        playEmergencyRealSheikhFallback(targetReciterId, chimeBefore, useMediaUsage = true, onFinished = onFinished)
     }
 
+    /**
+     * Used strictly as emergency spoken Adhan fallback when AdhanVoice.SYSTEM_TONE is chosen
+     * or an offline Adhan MP3 is missing; Adhkar playback never calls TTS.
+     */
     fun speakDhikr(
         phrase: String,
         voiceId: String = AdhkarVoicePreset.CALM_DEEP.id,
@@ -381,6 +364,59 @@ class DhikrSpeaker(
         }
     }
 
+    private fun resolveReciterForPlay(sheikh: AdhkarSheikhVoice, fallbackReciterId: String): String {
+        return when (sheikh) {
+            AdhkarSheikhVoice.MULTI_SHEIKHS -> rotatingReciterIds[(rotationCursor++) % rotatingReciterIds.size]
+            AdhkarSheikhVoice.HAMAD_AL_DURAYHIM -> fallbackReciterId
+            else -> sheikh.quranReciterId
+        }
+    }
+
+    private fun resolvePeriodicLocalUri(sheikh: AdhkarSheikhVoice, phraseIndex: Int): Uri? {
+        if (sheikh == AdhkarSheikhVoice.HAMAD_AL_DURAYHIM) {
+            return offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)
+        }
+        if (sheikh == AdhkarSheikhVoice.MULTI_SHEIKHS) {
+            // Mix real Quranic Duas/Tasbih across 6 real Sheikhs & Hamad Al-Durayhim Hisn recordings
+            if (phraseIndex % 3 == 0) {
+                offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)?.let { return it }
+            }
+            val reciterId = rotatingReciterIds[(phraseIndex + (rotationCursor++)) % rotatingReciterIds.size]
+            val ayah = periodicAyahPool[phraseIndex % periodicAyahPool.size]
+            offlineAudioRepository.getOfflineAyahUri(reciterId, ayah.first, ayah.second)?.let { return it }
+            offlineAudioRepository.getOfflinePeriodicDhikrUri(phraseIndex)?.let { return it }
+            return null
+        }
+        // Specific Sheikh chosen: prefer THEIR own genuine Quranic Dhikr/Dua voice
+        val ayah = periodicAyahPool[phraseIndex % periodicAyahPool.size]
+        offlineAudioRepository.getOfflineAyahUri(sheikh.quranReciterId, ayah.first, ayah.second)?.let { return it }
+        offlineAudioRepository.getOfflineAyahUri(sheikh.quranReciterId, 2, 255)?.let { return it }
+        return null
+    }
+
+    private suspend fun fetchPeriodicRemoteUri(
+        sheikh: AdhkarSheikhVoice,
+        phraseIndex: Int,
+        phraseText: String
+    ): Uri? {
+        if (sheikh == AdhkarSheikhVoice.HAMAD_AL_DURAYHIM) {
+            return offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
+        }
+        if (sheikh == AdhkarSheikhVoice.MULTI_SHEIKHS) {
+            if (phraseIndex % 3 == 0) {
+                offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)?.let { return it }
+            }
+            val reciterId = rotatingReciterIds[(phraseIndex + rotationCursor) % rotatingReciterIds.size]
+            val ayah = periodicAyahPool[phraseIndex % periodicAyahPool.size]
+            offlineAudioRepository.downloadAyahClip(reciterId, ayah.first, ayah.second)?.let { return it }
+            return offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
+        }
+        val ayah = periodicAyahPool[phraseIndex % periodicAyahPool.size]
+        return offlineAudioRepository.downloadAyahClip(sheikh.quranReciterId, ayah.first, ayah.second)
+            ?: offlineAudioRepository.downloadAyahClip(sheikh.quranReciterId, 2, 255)
+            ?: offlineAudioRepository.fetchAndCachePeriodicClip(phraseIndex, phraseText)
+    }
+
     private fun resolveLocalDhikrUri(item: DhikrItem, reciterId: String): Uri? {
         val surah = item.surahNumber
         if (surah != null) {
@@ -406,6 +442,32 @@ class DhikrSpeaker(
             }
         }
         return offlineAudioRepository.fetchAndCacheHisnDhikrClip(item.id, item.text)
+    }
+
+    private fun resolveAnyBundledRealSheikhUri(preferredReciterId: String): Uri? {
+        return offlineAudioRepository.getOfflineAyahUri(preferredReciterId, 2, 255)
+            ?: offlineAudioRepository.getOfflineAyahUri("afs", 2, 255)
+            ?: offlineAudioRepository.getOfflineAyahUri("yasser", 2, 255)
+            ?: offlineAudioRepository.getOfflineAyahUri("husr", 2, 255)
+            ?: offlineAudioRepository.getOfflineDhikrClipUri("m2")
+            ?: offlineAudioRepository.getOfflinePeriodicDhikrUri(0)
+    }
+
+    private fun playEmergencyRealSheikhFallback(
+        preferredReciterId: String,
+        chimeBefore: Boolean,
+        useMediaUsage: Boolean,
+        onFinished: (() -> Unit)?
+    ) {
+        val realUri = resolveAnyBundledRealSheikhUri(preferredReciterId)
+        if (realUri != null) {
+            if (chimeBefore) playChime()
+            if (playOfflineUri(realUri, useMediaUsage, onFinished)) {
+                return
+            }
+        }
+        _isSpeaking.value = false
+        onFinished?.invoke()
     }
 
     private fun notifyDone() {
@@ -598,6 +660,22 @@ class DhikrSpeaker(
     }
 
     companion object {
+        private val rotatingReciterIds = listOf("afs", "yasser", "husr", "qtm", "sgmd", "maher")
+
+        // Short authentic Quranic Ayat of Tasbih, Praise & Dua available across all 6 real Sheikhs
+        private val periodicAyahPool = listOf(
+            1 to 2,    // الحمد لله رب العالمين
+            2 to 201,  // ربنا آتنا في الدنيا حسنة
+            2 to 255,  // آية الكرسي
+            3 to 8,    // ربنا لا تزغ قلوبنا
+            3 to 173,  // حسبنا الله ونعم الوكيل
+            14 to 40,  // رب اجعلني مقيم الصلاة
+            21 to 87,  // لا إله إلا أنت سبحانك إني كنت من الظالمين
+            30 to 17,  // فسبحان الله حين تمسون وحين تصبحون
+            37 to 180, // سبحان ربك رب العزة عما يصفون
+            112 to 1   // قل هو الله أحد
+        )
+
         fun buildSpokenAdhanText(prayerName: String): String {
             val fajrLine = if (prayerName.contains("الفجر")) "، الصلاة خير من النوم، الصلاة خير من النوم" else ""
             return "الله أكبر الله أكبر، الله أكبر الله أكبر، أشهد أن لا إله إلا الله، أشهد أن لا إله إلا الله، أشهد أن محمداً رسول الله، أشهد أن محمداً رسول الله، حيّ على الصلاة، حيّ على الفلاح$fajrLine، الله أكبر الله أكبر، لا إله إلا الله. حان الآن موعد صلاة $prayerName"
